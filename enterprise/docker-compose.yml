@@ -1,0 +1,25 @@
+services:
+  influxdb:
+    image: influxdb:2.7
+    container_name: netguard-influxdb
+    restart: unless-stopped
+    env_file:
+      - ./secrets/enterprise.env
+    volumes:
+      - /var/lib/netguard/enterprise/influxdb:/var/lib/influxdb2
+    ports:
+      - "8086:8086"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: netguard-grafana
+    restart: unless-stopped
+    env_file:
+      - ./secrets/enterprise.env
+    volumes:
+      - /var/lib/netguard/enterprise/grafana:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - influxdb

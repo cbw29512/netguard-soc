@@ -1,0 +1,17 @@
+client_name,mac,ip,hostname
+BitMiner,D4:E9:F4:A8:84:EC,192.168.50.4,BitMiner
+CameraWIFI,A8:CA:77:A3:25:93,192.168.50.5,CameraWIFI
+MrComputerLAN,D8:43:AE:B0:CA:FC,192.168.50.6,MrComputerLAN
+NETGEARSWITCHLAN,28:94:01:71:0A:22,192.168.50.7,NETGEARSWITCHLAN
+ChrisTVWIFI,94:BD:BE:46:2D:83,192.168.50.8,ChrisTVWIFI
+PrinterWIFI,6C:0B:5E:CE:0E:65,192.168.50.9,PrinterWIFI
+TPLink2GLAN,E0:D3:62:81:F9:1B,192.168.50.10,TPLink2GLAN
+WorkLaptop,AC:1A:3D:53:95:B2,192.168.50.11,WorkLaptop
+ChrisIpad,76:0F:92:8E:2F:AB,192.168.50.14,ChrisIpad
+ChrisIPhone,C4:F7:C1:ED:C8:72,192.168.50.26,ChrisIPhone
+ChrisLaptop,44:A3:BB:43:3E:D3,192.168.50.27,ChrisLaptop
+personalcomputer,6C:2F:80:33:FF:9F,192.168.50.40,personalcomputer
+nucbox,84:47:09:51:CE:DE,192.168.50.50,nucbox
+nucboxusb,C8:A3:62:E9:B4:75,192.168.50.60,nucboxusb
+PersonalPhone,0A:E8:C3:DF:B4:D3,192.168.50.80,PersonalPhone
+OldIphone,DE:A2:00:EB:B9:10,192.168.50.85,OldIphone

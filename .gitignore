@@ -1,0 +1,5 @@
+enterprise/secrets/
+enterprise/grafana/provisioning/datasources/influxdb.yaml
+*.token
+*.tgz
+tmp/
