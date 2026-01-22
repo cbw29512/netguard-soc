@@ -1,0 +1,18 @@
+[
+  {"name":"BitMiner","mac":"D4:E9:F4:A8:84:EC","ip":"192.168.50.4"},
+  {"name":"CameraWIFI","mac":"A8:CA:77:A3:25:93","ip":"192.168.50.5"},
+  {"name":"MrComputerLAN","mac":"D8:43:AE:B0:CA:FC","ip":"192.168.50.6"},
+  {"name":"NETGEARSWITCHLAN","mac":"28:94:01:71:0A:22","ip":"192.168.50.7"},
+  {"name":"ChrisTVWIFI","mac":"94:BD:BE:46:2D:83","ip":"192.168.50.8"},
+  {"name":"PrinterWIFI","mac":"6C:0B:5E:CE:0E:65","ip":"192.168.50.9"},
+  {"name":"TPLink2GLAN","mac":"E0:D3:62:81:F9:1B","ip":"192.168.50.10"},
+  {"name":"WorkLaptop","mac":"AC:1A:3D:53:95:B2","ip":"192.168.50.11"},
+  {"name":"ChrisIpad","mac":"76:0F:92:8E:2F:AB","ip":"192.168.50.14"},
+  {"name":"ChrisIPhone","mac":"C4:F7:C1:ED:C8:72","ip":"192.168.50.26"},
+  {"name":"ChrisLaptop","mac":"44:A3:BB:43:3E:D3","ip":"192.168.50.27"},
+  {"name":"personalcomputer","mac":"6C:2F:80:33:FF:9F","ip":"192.168.50.40"},
+  {"name":"nucbox","mac":"84:47:09:51:CE:DE","ip":"192.168.50.50"},
+  {"name":"nucboxusb","mac":"C8:A3:62:E9:B4:75","ip":"192.168.50.60"},
+  {"name":"PersonalPhone","mac":"0A:E8:C3:DF:B4:D3","ip":"192.168.50.80"},
+  {"name":"OldIphone","mac":"DE:A2:00:EB:B9:10","ip":"192.168.50.85"}
+]
