@@ -1,0 +1,299 @@
+#!/usr/bin/env python3
+import json, os, re
+from datetime import datetime, timezone
+from pathlib import Path
+
+MAC_RE = re.compile(r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$", re.I)
+ZERO_MAC = "00:00:00:00:00:00"
+
+def utc_now():
+    return datetime.now(timezone.utc).isoformat()
+
+def load_json(path: Path):
+    try:
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return None
+
+def norm_mac(m: str) -> str:
+    m = (m or "").strip().lower()
+    return m
+
+def mac_ok(m: str) -> bool:
+    m = norm_mac(m)
+    return bool(MAC_RE.match(m)) and m != ZERO_MAC
+
+def wifi_assoc_counts(t: dict) -> dict:
+    """
+    Prefer live assoc counts pulled from router_wifi_assoc.json (handles MLO/subifs),
+    fallback to telemetry fields.
+    """
+    # 1) Preferred: router_wifi_assoc.json (fresh, MLO-safe)
+    try:
+        p = Path(os.getenv("WIFI_ASSOC_JSON", "/var/lib/netguard/router_wifi_assoc.json"))
+        if p.exists():
+            j = json.loads(p.read_text(encoding="utf-8", errors="replace"))
+            bases = ((j.get("wifi") or {}).get("bases") or {})
+            out = {"wl0": 0, "wl1": 0, "wl2": 0}
+            for b in ("wl0","wl1","wl2"):
+                out[b] = int((bases.get(b) or {}).get("assoc_count") or 0)
+            # If we got anything non-zero, trust it.
+            if any(out.values()):
+                return out
+    except Exception:
+        pass
+
+    # 2) Fallback: telemetry wifi fields
+    out = {"wl0": 0, "wl1": 0, "wl2": 0}
+    bands = (((t.get("wifi") or {}).get("bands")) or {})
+    for b in ("wl0","wl1","wl2"):
+        x = bands.get(b) or {}
+        c = x.get("assoc_count")
+        if not c:
+            c = x.get("assoc")
+        if not c:
+            am = x.get("assoc_macs")
+            if isinstance(am, list):
+                c = len(am)
+        if not c:
+            al = x.get("assoclist")
+            if isinstance(al, str) and al.strip():
+                c = len([z for z in al.split() if mac_ok(z)])
+        out[b] = int(c or 0)
+    return out
+
+
+def extract_devices(t: dict):
+    """
+    Build current device map from:
+      - DHCP leases (ip+hostname)
+      - ARP/neigh entries (ip)
+      - Wi-Fi assoc MACs (presence)
+    Returns:
+      devices: mac -> {ip, hostname}
+      seen_via: mac -> 'dhcp'|'arp'|'wifi'
+      counts: dhcp_count, arp_unique_macs
+    """
+    devices = {}
+    seen = {}
+
+    clients = t.get("clients") or {}
+    leases = clients.get("dhcp_leases") or []
+    arp_list = (
+        clients.get("arp")
+        or clients.get("arp_table")
+        or clients.get("arp_entries")
+        or []
+    )
+
+    # DHCP
+    for l in leases:
+        mac = norm_mac(l.get("mac"))
+        if not mac_ok(mac):
+            continue
+        ip = (l.get("ip") or "").strip()
+        hn = (l.get("hostname") or "").strip()
+        devices.setdefault(mac, {"ip": "", "hostname": ""})
+        if ip: devices[mac]["ip"] = ip
+        if hn: devices[mac]["hostname"] = hn
+        seen[mac] = "dhcp"
+
+    # ARP (build ip map)
+    arp_ip_by_mac = {}
+    for a in arp_list:
+        if not isinstance(a, dict):
+            continue
+        mac = norm_mac(a.get("mac"))
+        if not mac_ok(mac):
+            continue
+        ip = (a.get("ip") or "").strip()
+        if ip:
+            arp_ip_by_mac[mac] = ip
+        devices.setdefault(mac, {"ip": "", "hostname": ""})
+        if ip and not devices[mac]["ip"]:
+            devices[mac]["ip"] = ip
+        seen.setdefault(mac, "arp")
+
+    # Wi-Fi assoc macs (presence)
+    bands = (((t.get("wifi") or {}).get("bands")) or {})
+    assoc_macs = set()
+    for b, info in bands.items():
+        if not isinstance(info, dict):
+            continue
+        am = info.get("assoc_macs")
+        if isinstance(am, list):
+            for m in am:
+                m = norm_mac(m)
+                if mac_ok(m):
+                    assoc_macs.add(m)
+        al = info.get("assoclist")
+        if isinstance(al, str) and al.strip():
+            for m in al.split():
+                m = norm_mac(m)
+                if mac_ok(m):
+                    assoc_macs.add(m)
+
+    for mac in assoc_macs:
+        devices.setdefault(mac, {"ip": "", "hostname": ""})
+        if not devices[mac]["ip"] and mac in arp_ip_by_mac:
+            devices[mac]["ip"] = arp_ip_by_mac[mac]
+        seen.setdefault(mac, "wifi")
+
+    arp_unique = len({m for m in arp_ip_by_mac.keys() if mac_ok(m)})
+    return devices, seen, len(leases), arp_unique
+
+def load_baseline(b: dict):
+    """
+    Accept baseline in multiple formats:
+      - {"devices": {mac:{ip,hostname}}}
+      - {"devices_list": [{"mac":..,"ip":..,"hostname":..}, ...]}
+      - [{"mac":..,"ip":..,"hostname":..}, ...]
+    Returns dict mac -> {ip, hostname}
+    """
+    if not b:
+        return {}
+    # dict format
+    devs = b.get("devices")
+    if isinstance(devs, dict):
+        out = {}
+        for mac, info in devs.items():
+            mac = norm_mac(mac)
+            if not mac_ok(mac):
+                continue
+            ip = (info or {}).get("ip","") if isinstance(info, dict) else ""
+            hn = (info or {}).get("hostname","") if isinstance(info, dict) else ""
+            out[mac] = {"ip": (ip or "").strip(), "hostname": (hn or "").strip()}
+        return out
+    # list format
+    devs = b.get("devices_list")
+    if isinstance(devs, list):
+        out = {}
+        for it in devs:
+            if not isinstance(it, dict):
+                continue
+            mac = norm_mac(it.get("mac"))
+            if not mac_ok(mac):
+                continue
+            out[mac] = {"ip": (it.get("ip") or "").strip(), "hostname": (it.get("hostname") or "").strip()}
+        return out
+    # top-level list
+    if isinstance(b, list):
+        out = {}
+        for it in b:
+            if not isinstance(it, dict):
+                continue
+            mac = norm_mac(it.get("mac"))
+            if not mac_ok(mac):
+                continue
+            out[mac] = {"ip": (it.get("ip") or "").strip(), "hostname": (it.get("hostname") or "").strip()}
+        return out
+    return {}
+
+def main():
+    tel_path = Path(os.getenv("TEL_JSON", "/var/lib/netguard/router_telemetry.json"))
+    base_path = Path(os.getenv("BASELINE_JSON", "/var/lib/netguard/router_baseline.json"))
+    out_path = Path(os.getenv("OUT_JSON", "/var/lib/netguard/router_findings.json"))
+
+    out = {
+        "generated_at": utc_now(),
+        "ok": True,
+        "error": "",
+        "alerts": [],
+        "changes": {
+            "new_devices": [],
+            "gone_devices": [],
+            "ip_changes": [],
+            "hostname_changes": [],
+            "wifi_moves": [],
+        },
+        "summary": {
+            "dhcp_leases": 0,
+            "arp_macs": 0,
+            "wifi_assoc": {"wl0":0,"wl1":0,"wl2":0},
+        },
+    }
+
+    t = load_json(tel_path)
+    if not isinstance(t, dict) or not t.get("ok", False):
+        out["ok"] = False
+        out["error"] = (t or {}).get("error","telemetry unavailable") if isinstance(t, dict) else "telemetry unreadable"
+        out_path.write_text(json.dumps(out, indent=2) + "\n")
+        print(json.dumps({"ok": out["ok"], "error": out["error"]}))
+        return 0
+
+    devices_cur, seen_via, dhcp_count, arp_unique = extract_devices(t)
+    out["summary"]["dhcp_leases"] = dhcp_count
+    out["summary"]["arp_macs"] = arp_unique
+    out["summary"]["wifi_assoc"] = wifi_assoc_counts(t)
+
+    b_raw = load_json(base_path)
+    devices_base = load_baseline(b_raw if isinstance(b_raw, (dict, list)) else None)
+
+    base_macs = set(devices_base.keys())
+    cur_macs = set(devices_cur.keys())
+
+    new_macs = sorted(cur_macs - base_macs)
+    gone_macs = sorted(base_macs - cur_macs)
+
+    # new devices list
+    for mac in new_macs:
+        info = devices_cur.get(mac, {}) or {}
+        out["changes"]["new_devices"].append({
+            "mac": mac,
+            "ip": info.get("ip",""),
+            "hostname": info.get("hostname",""),
+            "seen_via": seen_via.get(mac,""),
+        })
+
+    # gone devices list
+    for mac in gone_macs:
+        info = devices_base.get(mac, {}) or {}
+        out["changes"]["gone_devices"].append({
+            "mac": mac,
+            "ip": info.get("ip",""),
+            "hostname": info.get("hostname",""),
+            "last_seen_via": "baseline",
+        })
+
+    # ip/hostname changes
+    for mac in sorted(cur_macs & base_macs):
+        bi = devices_base.get(mac, {}) or {}
+        ci = devices_cur.get(mac, {}) or {}
+        bip, cip = (bi.get("ip") or "").strip(), (ci.get("ip") or "").strip()
+        bih, cih = (bi.get("hostname") or "").strip(), (ci.get("hostname") or "").strip()
+        if bip and cip and bip != cip:
+            out["changes"]["ip_changes"].append({"mac": mac, "from": bip, "to": cip})
+        if bih and cih and bih != cih:
+            out["changes"]["hostname_changes"].append({"mac": mac, "from": bih, "to": cih})
+
+    # alerts (compact)
+    if out["changes"]["new_devices"]:
+        out["alerts"].append({
+            "severity": "medium",
+            "kind": "new_device",
+            "count": len(out["changes"]["new_devices"]),
+            "examples": [d["mac"] for d in out["changes"]["new_devices"][:8]],
+        })
+    if out["changes"]["gone_devices"]:
+        out["alerts"].append({
+            "severity": "low",
+            "kind": "gone_device",
+            "count": len(out["changes"]["gone_devices"]),
+            "examples": [d["mac"] for d in out["changes"]["gone_devices"][:8]],
+        })
+    if out["changes"]["ip_changes"]:
+        out["alerts"].append({
+            "severity": "low",
+            "kind": "ip_change",
+            "count": len(out["changes"]["ip_changes"]),
+            "examples": [c["mac"] for c in out["changes"]["ip_changes"][:8]],
+        })
+
+    out_path.write_text(json.dumps(out, indent=2) + "\n")
+    print(json.dumps({"ok": True, "alerts": len(out["alerts"]), "wifi_assoc": out["summary"]["wifi_assoc"]}))
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+import json, os, re, sqlite3, subprocess, sys, time
+from datetime import datetime, timezone
+from pathlib import Path
+
+ENVF = Path(os.environ.get("ENVF", "/opt/netguard/sensors/router_clients.env"))
+KEY  = os.environ.get("KEY",  "/var/lib/netguard/keys/netguard_router_ed25519")
+KNOWN= os.environ.get("KNOWN","/var/lib/netguard/ssh_known_hosts")
+OUT  = Path(os.environ.get("OUT",  "/var/lib/netguard/router_telemetry.json"))
+DB   = Path(os.environ.get("DB",   "/var/lib/netguard/router_telemetry.sqlite"))
+
+def utc_now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+def load_env(path: Path) -> dict:
+    d = {}
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k,v = line.split("=",1)
+        d[k.strip()] = v.strip().strip('"').strip("'")
+    return d
+
+def ssh(host: str, user: str, cmd: str, timeout=8) -> str:
+    base = [
+        "ssh",
+        "-i", KEY,
+        "-o", f"UserKnownHostsFile={KNOWN}",
+        "-o", "StrictHostKeyChecking=yes",
+        "-o", "BatchMode=yes",
+        "-o", "PreferredAuthentications=publickey",
+        "-o", "ConnectTimeout=5",
+        f"{user}@{host}",
+        cmd
+    ]
+    p = subprocess.run(base, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
+    if p.returncode != 0:
+        raise RuntimeError(f"ssh rc={p.returncode}: {p.stderr.strip()[:300]}")
+    return p.stdout
+
+def parse_dnsmasq_leases(txt: str):
+    # expiry mac ip hostname clientid
+    out = []
+    for line in txt.splitlines():
+        parts = line.strip().split()
+        if len(parts) < 3:
+            continue
+        expiry, mac, ip = parts[0], parts[1].lower(), parts[2]
+        hostname = parts[3] if len(parts) >= 4 else ""
+        clientid = parts[4] if len(parts) >= 5 else ""
+        try:
+            exp_i = int(expiry)
+        except Exception:
+            exp_i = None
+        out.append({
+            "expiry_epoch": exp_i,
+            "mac": mac,
+            "ip": ip,
+            "hostname": hostname if hostname != "*" else "",
+            "clientid": clientid if clientid != "*" else "",
+        })
+    return out
+
+def parse_proc_net_arp(txt: str):
+    rows = []
+    lines = [l for l in txt.splitlines() if l.strip()]
+    if not lines:
+        return rows
+    # header: IP address HW type Flags HW address Mask Device
+    for line in lines[1:]:
+        parts = line.split()
+        if len(parts) < 6:
+            continue
+        ip, hwtype, flags, mac, mask, dev = parts[:6]
+        rows.append({
+            "ip": ip,
+            "mac": mac.lower(),
+            "flags": flags,
+            "dev": dev
+        })
+    return rows
+
+def parse_assoclist(txt: str):
+    macs = []
+    for line in txt.splitlines():
+        m = re.search(r"assoclist\s+([0-9a-f:]{17})", line.lower())
+        if m:
+            macs.append(m.group(1))
+    return macs
+
+def parse_proc_net_dev(txt: str):
+    # /proc/net/dev: iface: rx_bytes ... tx_bytes ...
+    out = {}
+    lines = txt.splitlines()
+    for line in lines[2:]:
+        if ":" not in line:
+            continue
+        iface, rest = line.split(":",1)
+        iface = iface.strip()
+        cols = rest.split()
+        if len(cols) < 16:
+            continue
+        rx_bytes = int(cols[0]); rx_pkts = int(cols[1]); rx_err = int(cols[2]); rx_drop = int(cols[3])
+        tx_bytes = int(cols[8]); tx_pkts = int(cols[9]); tx_err = int(cols[10]); tx_drop = int(cols[11])
+        out[iface] = {
+            "rx_bytes": rx_bytes, "rx_pkts": rx_pkts, "rx_err": rx_err, "rx_drop": rx_drop,
+            "tx_bytes": tx_bytes, "tx_pkts": tx_pkts, "tx_err": tx_err, "tx_drop": tx_drop,
+        }
+    return out
+
+def main():
+    env = load_env(ENVF)
+    host = env.get("ROUTER_HOST","192.168.50.1")
+    user = env.get("ROUTER_USER","nucboxr")
+
+    sample = {
+        "generated_at": utc_now_iso(),
+        "router_host": host,
+        "router_user": user,
+        "ok": True,
+        "error": "",
+        "router": {},
+        "clients": {},
+        "wifi": {},
+        "net": {},
+    }
+
+    try:
+        # Core identity
+        leases = ssh(host,user, "cat /var/lib/misc/dnsmasq.leases 2>/dev/null || true")
+        arp    = ssh(host,user, "cat /proc/net/arp 2>/dev/null || true")
+        sample["clients"]["dhcp_leases"] = parse_dnsmasq_leases(leases)
+        sample["clients"]["arp_table"]   = parse_proc_net_arp(arp)
+
+        # Wi-Fi interfaces
+        ifnames = ssh(host,user, "echo wl0=$(nvram get wl0_ifname 2>/dev/null); echo wl1=$(nvram get wl1_ifname 2>/dev/null); echo wl2=$(nvram get wl2_ifname 2>/dev/null)")
+        wlmap = {}
+        for line in ifnames.splitlines():
+            if "=" in line:
+                k,v = line.split("=",1)
+                wlmap[k.strip()] = v.strip()
+        sample["wifi"]["ifnames"] = wlmap
+
+        # Assoc lists + status (best-effort)
+        wifi = {}
+        for k in ("wl0","wl1","wl2"):
+            ifn = wlmap.get(k,"")
+            if not ifn:
+                continue
+            assoc = ssh(host,user, f"wl -i {ifn} assoclist 2>/dev/null || true")
+            status= ssh(host,user, f"wl -i {ifn} status 2>/dev/null || true")
+            wifi[k] = {
+                "ifname": ifn,
+                "assoc_macs": parse_assoclist(assoc),
+                "status_raw": status.strip()
+            }
+        sample["wifi"]["bands"] = wifi
+
+        # Router health / net stats
+        sample["router"]["uname"]   = ssh(host,user, "uname -a 2>/dev/null || cat /proc/version 2>/dev/null || true").strip()
+        sample["router"]["uptime"]  = ssh(host,user, "uptime 2>/dev/null || cat /proc/uptime 2>/dev/null || true").strip()
+        sample["router"]["loadavg"] = ssh(host,user, "cat /proc/loadavg 2>/dev/null || true").strip()
+        sample["router"]["meminfo"] = ssh(host,user, "cat /proc/meminfo 2>/dev/null | head -n 25 || true").strip()
+
+        ct = ssh(host,user, "cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null; cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null")
+        ct_lines = [l.strip() for l in ct.splitlines() if l.strip()]
+        if len(ct_lines) >= 2:
+            sample["net"]["conntrack"] = {"count": int(ct_lines[0]), "max": int(ct_lines[1])}
+
+        dev = ssh(host,user, "cat /proc/net/dev 2>/dev/null || true")
+        sample["net"]["if_counters"] = parse_proc_net_dev(dev)
+
+        # Derived counts
+        arp_macs = {r["mac"] for r in sample["clients"]["arp_table"] if r.get("mac")}
+        lease_macs = {r["mac"] for r in sample["clients"]["dhcp_leases"] if r.get("mac")}
+        sample["clients"]["counts"] = {
+            "dhcp_leases": len(sample["clients"]["dhcp_leases"]),
+            "arp_entries": len(sample["clients"]["arp_table"]),
+            "unique_macs_arp": len(arp_macs),
+            "unique_macs_leases": len(lease_macs),
+        }
+
+    except Exception as e:
+        sample["ok"] = False
+        sample["error"] = str(e)
+
+    # Write JSON atomically
+    tmp = OUT.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(sample, indent=2, sort_keys=False), encoding="utf-8")
+    tmp.replace(OUT)
+
+    # Append to SQLite for trend/AI
+    try:
+        con = sqlite3.connect(str(DB))
+        con.execute("PRAGMA journal_mode=WAL;")
+        con.execute("CREATE TABLE IF NOT EXISTS router_samples (ts TEXT PRIMARY KEY, json TEXT NOT NULL);")
+        con.execute("INSERT OR REPLACE INTO router_samples (ts, json) VALUES (?, ?);", (sample["generated_at"], json.dumps(sample)))
+        con.commit()
+        con.close()
+    except Exception:
+        pass
+
+    print(json.dumps({"ok": sample["ok"], "generated_at": sample["generated_at"], "error": sample["error"]}))
+
+if __name__ == "__main__":
+    main()

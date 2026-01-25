@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+import json
+from pathlib import Path
+from datetime import datetime, timezone
+
+TEL = Path("/var/lib/netguard/router_telemetry.json")
+FIND = Path("/var/lib/netguard/router_findings.json")
+SYSF = Path("/var/lib/netguard/router_syslog_findings.json")
+OUT = Path("/var/lib/netguard/router_ai_brief.json")
+
+def utc_now():
+    return datetime.now(timezone.utc).isoformat()
+
+def load(p: Path):
+    try:
+        return json.loads(p.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return {}
+
+def score(tel, find, sysf):
+    risk = 0
+    notes = []
+    actions = []
+
+    # Findings alerts (new devices etc)
+    alerts = (find or {}).get("alerts", []) or []
+    for a in alerts:
+        kind = a.get("kind","")
+        sev = a.get("severity","")
+        if kind == "new_device":
+            c = int(a.get("count", 0) or 0)
+            if c >= 1:
+                risk += min(20, 3*c)
+                notes.append(f"{c} new device(s) detected by DHCP.")
+                actions.append("Verify each new MAC/IP is expected (phones/tablets/IoT). If unknown, pause Wi-Fi join and investigate.")
+
+    # Syslog security signals
+    ssum = (sysf or {}).get("summary", {}) or {}
+    other = int(ssum.get("ssh_connections_not_from_nuc", 0) or 0)
+    fails = int(ssum.get("ssh_auth_failures", 0) or 0)
+    if other:
+        risk += min(60, 20*other)
+        notes.append(f"SSH connections observed from non-NUC IPs: {other}.")
+        actions.append("Lock router SSH to LAN only and restrict by source IP if possible. Confirm remote admin is OFF.")
+    if fails:
+        risk += min(60, 15*fails)
+        notes.append(f"SSH auth failures observed: {fails}.")
+        actions.append("Change router admin password; ensure password login is disabled for SSH; rotate keys.")
+
+    # Router resource safety (telemetry)
+    r = (tel or {}).get("router", {}) or {}
+    loadavg = (r.get("loadavg","") or "").split()
+    try:
+        load1 = float(loadavg[0])
+        if load1 > 1.0:
+            risk += 10
+            notes.append(f"Router load1 elevated: {load1}.")
+            actions.append("Reduce polling; review heavy features (traffic analyzer/QoS/logging) if performance degrades.")
+    except Exception:
+        pass
+
+    # Clamp & label
+    risk = max(0, min(100, risk))
+    if risk >= 70: level="HIGH"
+    elif risk >= 35: level="MEDIUM"
+    else: level="LOW"
+
+    return risk, level, notes, actions
+
+def main():
+    tel = load(TEL)
+    find = load(FIND)
+    sysf = load(SYSF)
+
+    risk, level, notes, actions = score(tel, find, sysf)
+
+    out = {
+        "generated_at": utc_now(),
+        "ok": True,
+        "risk_score": risk,
+        "risk_level": level,
+        "notes": notes[:12],
+        "recommended_actions": actions[:12],
+        "pointers": {
+            "telemetry": str(TEL),
+            "findings": str(FIND),
+            "syslog_findings": str(SYSF),
+        }
+    }
+    OUT.write_text(json.dumps(out, indent=2))
+    print(json.dumps({"ok": True, "risk": risk, "level": level}))
+if __name__ == "__main__":
+    main()

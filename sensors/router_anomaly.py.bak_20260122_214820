@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+import json, os, sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+TELEMETRY = Path(os.environ.get("TELEMETRY_JSON", "/var/lib/netguard/router_telemetry.json"))
+OUT       = Path(os.environ.get("FINDINGS_JSON",  "/var/lib/netguard/router_findings.json"))
+BASELINE  = Path(os.environ.get("BASELINE_JSON",  "/var/lib/netguard/router_baseline.json"))
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+def _load_json(p: Path, default):
+    try:
+        if p.exists():
+            txt = p.read_text(encoding="utf-8", errors="replace").strip()
+            return json.loads(txt) if txt else default
+    except Exception:
+        return default
+    return default
+
+def _save_json_atomic(p: Path, obj) -> None:
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(json.dumps(obj, indent=2), encoding="utf-8")
+    tmp.replace(p)
+
+def _norm_mac(m) -> str:
+    if not isinstance(m, str):
+        return ""
+    return m.strip().lower()
+
+def _extract_state(tel: dict) -> dict:
+    # Supports your telemetry schema:
+    # tel["clients"]["dhcp_leases"] list
+    # tel["clients"]["arp"] list
+    # tel["wifi"]["bands"]["wl0|wl1|wl2"]["assoc"] int
+    clients = tel.get("clients", {}) if isinstance(tel, dict) else {}
+    wifi    = tel.get("wifi", {}) if isinstance(tel, dict) else {}
+    bands   = wifi.get("bands", {}) if isinstance(wifi, dict) else {}
+
+    leases = clients.get("dhcp_leases") or []
+    arp    = clients.get("arp") or []
+
+    macs = set()
+    dev_map = {}
+
+    for x in leases:
+        if not isinstance(x, dict): 
+            continue
+        mac = _norm_mac(x.get("mac", ""))
+        if not mac:
+            continue
+        macs.add(mac)
+        dev_map.setdefault(mac, {})["mac"] = mac
+        dev_map[mac]["ip"] = x.get("ip","")
+        dev_map[mac]["hostname"] = x.get("hostname","")
+        dev_map[mac]["lease_expiry_epoch"] = x.get("expiry_epoch", None)
+        dev_map[mac]["seen_via"] = "dhcp"
+
+    for x in arp:
+        if not isinstance(x, dict):
+            continue
+        mac = _norm_mac(x.get("mac","") or x.get("hw_address",""))
+        if not mac:
+            continue
+        macs.add(mac)
+        dev_map.setdefault(mac, {})["mac"] = mac
+        dev_map[mac].setdefault("ip", x.get("ip",""))
+        dev_map[mac]["arp_iface"] = x.get("device","")
+        dev_map[mac]["arp_flags"] = x.get("flags","")
+        dev_map[mac].setdefault("seen_via", "arp")
+
+    wifi_assoc = {}
+    for b in ("wl0","wl1","wl2"):
+        bx = bands.get(b, {}) if isinstance(bands, dict) else {}
+        a = bx.get("assoc")
+        wifi_assoc[b] = int(a) if isinstance(a, int) else 0
+
+    return {
+        "macs": sorted(macs),
+        "devices": [dev_map[m] for m in sorted(dev_map.keys())],
+        "counts": {
+            "dhcp_leases": len(leases),
+            "arp_macs": len({ _norm_mac(x.get("mac","") or x.get("hw_address","")) for x in arp if isinstance(x, dict) and _norm_mac(x.get("mac","") or x.get("hw_address","")) })
+        },
+        "wifi_assoc": wifi_assoc
+    }
+
+def main() -> int:
+    out = {
+        "generated_at": utc_now(),
+        "ok": True,
+        "error": "",
+        "alerts": [],
+        "changes": {
+            "new_devices": [],
+            "gone_devices": [],
+            "ip_changes": [],
+            "hostname_changes": [],
+            "wifi_moves": []
+        },
+        "summary": {
+            "dhcp_leases": 0,
+            "arp_macs": 0,
+            "wifi_assoc": {"wl0":0,"wl1":0,"wl2":0}
+        }
+    }
+
+    tel = _load_json(TELEMETRY, {})
+    if not isinstance(tel, dict) or not tel:
+        out["ok"] = False
+        out["error"] = f"telemetry unreadable/empty: {TELEMETRY}"
+        _save_json_atomic(OUT, out)
+        print(json.dumps({"ok": out["ok"], "error": out["error"]}))
+        return 0  # IMPORTANT: don't fail systemd timer
+
+    cur = _extract_state(tel)
+    prev = _load_json(BASELINE, {})
+    prev_macs = set(prev.get("macs", []) if isinstance(prev, dict) else [])
+    cur_macs  = set(cur.get("macs", []))
+
+    new = sorted(cur_macs - prev_macs)
+    gone = sorted(prev_macs - cur_macs)
+
+    prev_dev = {d.get("mac"): d for d in (prev.get("devices", []) if isinstance(prev, dict) else []) if isinstance(d, dict) and d.get("mac")}
+
+    # Per-device changes
+    cur_dev_map = {d.get("mac"): d for d in (cur.get("devices", []) or []) if isinstance(d, dict) and d.get("mac")}
+    for mac, d in cur_dev_map.items():
+        pd = prev_dev.get(mac, {})
+        ip, pip = d.get("ip",""), pd.get("ip","")
+        if ip and pip and ip != pip:
+            out["changes"]["ip_changes"].append({"mac": mac, "from": pip, "to": ip})
+        hn, phn = d.get("hostname",""), pd.get("hostname","")
+        if hn and phn and hn != phn:
+            out["changes"]["hostname_changes"].append({"mac": mac, "from": phn, "to": hn})
+
+    out["changes"]["new_devices"]  = [cur_dev_map.get(m, {"mac": m}) for m in new]
+    out["changes"]["gone_devices"] = [prev_dev.get(m, {"mac": m}) for m in gone]
+
+    # Simple alerts
+    if new:
+        out["alerts"].append({"severity":"medium","kind":"new_device","count": len(new), "examples": new[:8]})
+
+    out["summary"] = {
+        "dhcp_leases": cur["counts"]["dhcp_leases"],
+        "arp_macs": cur["counts"]["arp_macs"],
+        "wifi_assoc": cur["wifi_assoc"]
+    }
+
+    # Persist baseline for next diff
+    base = {
+        "generated_at": out["generated_at"],
+        "macs": cur["macs"],
+        "devices": cur["devices"]
+    }
+    _save_json_atomic(BASELINE, base)
+    _save_json_atomic(OUT, out)
+
+    print(json.dumps({"ok": out["ok"], "generated_at": out["generated_at"], "alerts": len(out["alerts"])}))
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,231 @@
+#!/usr/bin/env python3
+import json, sqlite3, os, re
+from datetime import datetime, timezone
+from pathlib import Path
+
+# NG_WIFI_SCHEMA_V2
+def _wifi_assoc_summary_from_telemetry(latest: dict) -> dict:
+    """
+    Telemetry schema (v3+):
+      latest["wifi"]["bands"]["wl0"]["assoc"] = int
+    """
+    out = {"wl0": 0, "wl1": 0, "wl2": 0}
+    try:
+        bands = (latest or {}).get("wifi", {}).get("bands", {}) or {}
+        for b in ("wl0","wl1","wl2"):
+            v = bands.get(b, {}) or {}
+            a = v.get("assoc")
+            if isinstance(a, int):
+                out[b] = a
+    except Exception:
+        pass
+    return out
+
+
+DB = Path(os.environ.get("DB", "/var/lib/netguard/router_telemetry.sqlite"))
+OUT = Path(os.environ.get("OUT", "/var/lib/netguard/router_findings.json"))
+
+def utc_now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+def load_last_two(db: Path):
+    con = sqlite3.connect(str(db))
+    con.execute("PRAGMA journal_mode=WAL;")
+    rows = con.execute(
+        "SELECT ts, json FROM router_samples ORDER BY ts DESC LIMIT 2;"
+    ).fetchall()
+    con.close()
+    items = []
+    for ts, js in rows:
+        try:
+            items.append((ts, json.loads(js)))
+        except Exception:
+            continue
+    return items  # newest first
+
+def macmap_from_leases(sample):
+    leases = (sample.get("clients", {}) or {}).get("dhcp_leases", []) or []
+    m = {}
+    for r in leases:
+        mac = (r.get("mac") or "").lower().strip()
+        if not mac:
+            continue
+        m[mac] = {
+            "ip": r.get("ip",""),
+            "hostname": r.get("hostname",""),
+            "clientid": r.get("clientid",""),
+            "expiry_epoch": r.get("expiry_epoch", None),
+        }
+    return m
+
+def macset_from_arp(sample):
+    arp = (sample.get("clients", {}) or {}).get("arp_table", []) or []
+    s = set()
+    for r in arp:
+        mac = (r.get("mac") or "").lower().strip()
+        if mac and mac != "00:00:00:00:00:00":
+            s.add(mac)
+    return s
+
+def wifi_band_map(sample):
+    bands = ((sample.get("wifi", {}) or {}).get("bands", {}) or {})
+    # build mac -> band (wl0/wl1/wl2) map (best-effort)
+    mac2band = {}
+    for band, info in bands.items():
+        for mac in info.get("assoc_macs", []) or []:
+            mac = (mac or "").lower().strip()
+            if mac:
+                mac2band[mac] = band
+    return mac2band
+
+def parse_load(loadavg_str):
+    # "0.12 0.15 0.16 1/192 16433"
+    try:
+        a = loadavg_str.split()
+        return float(a[0]), float(a[1]), float(a[2])
+    except Exception:
+        return None
+
+def kb_from_meminfo(meminfo_str, key):
+    # find "MemAvailable: 332184 kB"
+    m = re.search(rf"^{re.escape(key)}:\s+(\d+)\s+kB", meminfo_str, re.M)
+    return int(m.group(1)) if m else None
+
+def main():
+    out = {
+        "generated_at": utc_now_iso(),
+        "ok": True,
+        "error": "",
+        "alerts": [],
+        "changes": {
+            "new_devices": [],
+            "gone_devices": [],
+            "ip_changes": [],
+            "hostname_changes": [],
+            "wifi_moves": [],
+        },
+        "summary": {},
+    }
+
+    if not DB.exists():
+        out["ok"] = False
+        out["error"] = f"missing DB: {DB}"
+        OUT.write_text(json.dumps(out, indent=2), encoding="utf-8")
+        return
+
+    items = load_last_two(DB)
+    if len(items) < 1:
+        out["ok"] = False
+        out["error"] = "no samples yet"
+        OUT.write_text(json.dumps(out, indent=2), encoding="utf-8")
+        return
+
+    cur_ts, cur = items[0]
+    prev = items[1][1] if len(items) > 1 else None
+
+    cur_leases = macmap_from_leases(cur)
+    cur_arp_macs = macset_from_arp(cur)
+    cur_wifi = wifi_band_map(cur)
+
+    out["summary"]["dhcp_leases"] = len(cur_leases)
+    out["summary"]["arp_macs"] = len(cur_arp_macs)
+    out["summary"]["wifi_assoc"] = {
+        "wl0": len(((cur.get("wifi", {}) or {}).get("bands", {}) or {}).get("wl0", {}).get("assoc_macs", []) or []),
+        "wl1": len(((cur.get("wifi", {}) or {}).get("bands", {}) or {}).get("wl1", {}).get("assoc_macs", []) or []),
+        "wl2": len(((cur.get("wifi", {}) or {}).get("bands", {}) or {}).get("wl2", {}).get("assoc_macs", []) or []),
+    }
+
+    # --- health thresholds ---
+    net = cur.get("net", {}) or {}
+    ct = net.get("conntrack")
+    if ct and isinstance(ct, dict):
+        count = ct.get("count"); mx = ct.get("max")
+        if isinstance(count, int) and isinstance(mx, int) and mx > 0:
+            pct = (count / mx) * 100.0
+            out["summary"]["conntrack_pct"] = round(pct, 1)
+            if pct >= 85.0:
+                out["alerts"].append({"severity":"high","kind":"router_conntrack","msg":f"Conntrack {pct:.1f}% ({count}/{mx})","data":ct})
+            elif pct >= 70.0:
+                out["alerts"].append({"severity":"med","kind":"router_conntrack","msg":f"Conntrack {pct:.1f}% ({count}/{mx})","data":ct})
+
+    r = cur.get("router", {}) or {}
+    meminfo = r.get("meminfo","") or ""
+    mem_avail_kb = kb_from_meminfo(meminfo, "MemAvailable")
+    if mem_avail_kb is not None:
+        out["summary"]["mem_available_mb"] = round(mem_avail_kb/1024, 1)
+        if mem_avail_kb < 80*1024:
+            out["alerts"].append({"severity":"high","kind":"router_mem","msg":f"Low MemAvailable {mem_avail_kb//1024} MB","data":{"MemAvailable_kB":mem_avail_kb}})
+        elif mem_avail_kb < 150*1024:
+            out["alerts"].append({"severity":"med","kind":"router_mem","msg":f"MemAvailable trending low {mem_avail_kb//1024} MB","data":{"MemAvailable_kB":mem_avail_kb}})
+
+    loadavg = r.get("loadavg","") or ""
+    l = parse_load(loadavg)
+    if l:
+        out["summary"]["load1"] = l[0]
+        if l[0] >= 2.0:
+            out["alerts"].append({"severity":"med","kind":"router_load","msg":f"High 1-min load {l[0]}","data":{"loadavg":loadavg}})
+
+    # --- compare with previous sample ---
+    if prev:
+        prev_leases = macmap_from_leases(prev)
+        prev_wifi = wifi_band_map(prev)
+        prev_if = ((prev.get("net", {}) or {}).get("if_counters", {}) or {})
+        cur_if  = ((cur.get("net", {}) or {}).get("if_counters", {}) or {})
+
+        # new/gone devices from DHCP (more stable than ARP)
+        cur_macs = set(cur_leases.keys())
+        prev_macs = set(prev_leases.keys())
+
+        for mac in sorted(cur_macs - prev_macs):
+            out["changes"]["new_devices"].append({"mac":mac, **cur_leases.get(mac,{})})
+        for mac in sorted(prev_macs - cur_macs):
+            out["changes"]["gone_devices"].append({"mac":mac, **prev_leases.get(mac,{})})
+
+        # ip/hostname changes
+        for mac in sorted(cur_macs & prev_macs):
+            cip = cur_leases[mac].get("ip","")
+            pip = prev_leases[mac].get("ip","")
+            if cip and pip and cip != pip:
+                out["changes"]["ip_changes"].append({"mac":mac, "from":pip, "to":cip, "hostname":cur_leases[mac].get("hostname","")})
+            ch = cur_leases[mac].get("hostname","") or ""
+            ph = prev_leases[mac].get("hostname","") or ""
+            if ch and ph and ch != ph:
+                out["changes"]["hostname_changes"].append({"mac":mac, "from":ph, "to":ch, "ip":cip})
+
+        # wifi band moves
+        for mac, band in cur_wifi.items():
+            pband = prev_wifi.get(mac)
+            if pband and pband != band:
+                out["changes"]["wifi_moves"].append({"mac":mac, "from":pband, "to":band})
+
+        # interface drops/errors delta
+        for iface, curc in cur_if.items():
+            prevc = prev_if.get(iface)
+            if not prevc:
+                continue
+            for k in ("rx_drop","tx_drop","rx_err","tx_err"):
+                try:
+                    d = int(curc.get(k,0)) - int(prevc.get(k,0))
+                except Exception:
+                    d = 0
+                if d > 0:
+                    out["alerts"].append({
+                        "severity":"med",
+                        "kind":"if_counter_delta",
+                        "msg":f"{iface} {k} increased by {d}",
+                        "data":{"iface":iface,"counter":k,"delta":d,"current":curc.get(k),"prev":prevc.get(k)}
+                    })
+
+    # write atomically
+    tmp = OUT.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(out, indent=2, sort_keys=False), encoding="utf-8")
+    tmp.replace(OUT)
+
+    print(json.dumps({"ok": out["ok"], "generated_at": out["generated_at"], "alerts": len(out["alerts"])}))
+
+if __name__ == "__main__":
+    main()
+
+
+out.setdefault("summary", {})
+out["summary"]["wifi_assoc"] = _wifi_assoc_summary_from_telemetry(latest)

@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+import json
+from pathlib import Path
+from datetime import datetime, timezone
+
+TEL = Path("/var/lib/netguard/router_telemetry.json")
+FIND = Path("/var/lib/netguard/router_findings.json")
+SYSF = Path("/var/lib/netguard/router_syslog_findings.json")
+OUT = Path("/var/lib/netguard/router_ai_brief.json")
+
+def utc_now():
+    return datetime.now(timezone.utc).isoformat()
+
+def load(p: Path):
+    try:
+        return json.loads(p.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return {}
+
+def wifi_counts(tel):
+    bands = (tel or {}).get("wifi", {}).get("bands", {}) or {}
+    out = {}
+    for b in ("wl0","wl1","wl2"):
+        x = bands.get(b, {}) or {}
+        # try multiple schema variants
+        c = x.get("assoc_count", None)
+        if c is None: c = x.get("assoc", None)
+        if c is None and isinstance(x.get("assoc_macs"), list): c = len(x.get("assoc_macs"))
+        if c is None and isinstance(x.get("assoclist"), list): c = len(x.get("assoclist"))
+        out[b] = int(c) if isinstance(c, (int, float)) else 0
+    return out
+
+def score_and_summarize(tel, find, sysf):
+    risk = 0
+    notes = []
+    actions = []
+
+    # Always-present status
+    leases = (tel or {}).get("clients", {}).get("dhcp_leases", []) or []
+    notes.append(f"DHCP leases seen: {len(leases)}.")
+    wc = wifi_counts(tel)
+    notes.append(f"Wi-Fi associations: wl0={wc['wl0']}, wl1={wc['wl1']}, wl2={wc['wl2']}.")
+
+    # Findings alerts
+    f_alerts = (find or {}).get("alerts", []) or []
+    for a in f_alerts:
+        kind = a.get("kind","")
+        sev = a.get("severity","")
+        if kind == "new_device":
+            c = int(a.get("count", 0) or 0)
+            if c >= 1:
+                risk += min(25, 4*c)
+                notes.append(f"{c} new device(s) detected via DHCP.")
+                actions.append("Verify each new MAC/IP is expected; if unknown, investigate before it becomes persistent.")
+
+    # Syslog signals
+    ssum = (sysf or {}).get("summary", {}) or {}
+    ignored = int(ssum.get("ignored_expected_dropbear_from_nuc", 0) or 0)
+    other = int(ssum.get("ssh_connections_not_from_nuc", 0) or 0)
+    fails = int(ssum.get("ssh_auth_failures", 0) or 0)
+
+    notes.append(f"Router syslog: expected NUC SSH noise suppressed ({ignored} lines in window).")
+
+    if other:
+        risk += min(60, 20*other)
+        notes.append(f"SSH connections observed from non-NUC IPs: {other}.")
+        actions.append("Lock router SSH to LAN only and restrict by source IP if possible. Confirm remote admin is OFF.")
+    if fails:
+        risk += min(60, 15*fails)
+        notes.append(f"SSH auth failures observed: {fails}.")
+        actions.append("Change router admin password; disable SSH password login; rotate keys.")
+
+    top = ssum.get("top_programs_excluding_expected_ssh", []) or []
+    if top:
+        notes.append("Top router syslog programs (excl expected SSH): " + ", ".join([f"{x.get('program')}({x.get('count')})" for x in top[:5]]))
+
+    # Clamp & label
+    risk = max(0, min(100, risk))
+    if risk >= 70: level="HIGH"
+    elif risk >= 35: level="MEDIUM"
+    else: level="LOW"
+
+    # Helpful “next step” nudges
+    if wc["wl1"] == 0 and wc["wl2"] == 0:
+        actions.append("Once MLO + 5/6 GHz are active, watch wl1/wl2 assoc counts rise; that confirms traffic moved off the retired AP.")
+
+    return risk, level, notes[:12], actions[:12]
+
+def main():
+    tel = load(TEL)
+    find = load(FIND)
+    sysf = load(SYSF)
+
+    risk, level, notes, actions = score_and_summarize(tel, find, sysf)
+
+    out = {
+        "generated_at": utc_now(),
+        "ok": True,
+        "risk_score": risk,
+        "risk_level": level,
+        "notes": notes,
+        "recommended_actions": actions,
+        "pointers": {
+            "telemetry": str(TEL),
+            "findings": str(FIND),
+            "syslog_findings": str(SYSF),
+        }
+    }
+    OUT.write_text(json.dumps(out, indent=2))
+    print(json.dumps({"ok": True, "risk": risk, "level": level}))
+if __name__ == "__main__":
+    main()

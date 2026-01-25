@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+import json, os, re, sys
+from datetime import datetime, timezone
+from pathlib import Path
+from ipaddress import ip_network, ip_address
+
+MAC_RE = re.compile(r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$", re.I)
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+def read_json(path: Path, default):
+    try:
+        if not path.exists():
+            return default
+        return json.loads(path.read_text(errors="replace"))
+    except Exception:
+        return default
+
+def write_json(path: Path, obj) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(obj, indent=2) + "\n")
+
+def norm_mac(m: str) -> str:
+    m = (m or "").strip().lower()
+    return m
+
+def is_mac(m: str) -> bool:
+    return bool(MAC_RE.match(m or ""))
+
+def is_locally_administered(mac: str) -> bool:
+    """
+    LAA bit = 0x02 in first octet. Random/private MACs commonly have this set.
+    """
+    try:
+        b0 = int(mac.split(":")[0], 16)
+        return bool(b0 & 0x02)
+    except Exception:
+        return False
+
+def load_inventory(inv_path: Path):
+    inv = read_json(inv_path, {})
+    lan_cidr = inv.get("lan_cidr", "192.168.50.0/24")
+    lan = ip_network(lan_cidr, strict=False)
+    res = inv.get("reservations", []) or []
+    by_mac = {}
+    for r in res:
+        mac = norm_mac(r.get("mac",""))
+        if is_mac(mac):
+            by_mac[mac] = {
+                "name": r.get("name",""),
+                "ip": r.get("ip",""),
+                "mac": mac,
+            }
+    return lan, by_mac, inv
+
+def load_telemetry(tel_path: Path):
+    t = read_json(tel_path, {})
+    leases = ((t.get("clients") or {}).get("dhcp_leases") or [])
+    by_mac = {}
+    for l in leases:
+        mac = norm_mac(l.get("mac",""))
+        ip  = (l.get("ip") or "").strip()
+        hn  = (l.get("hostname") or "").strip()
+        if is_mac(mac) and mac != "00:00:00:00:00:00":
+            by_mac[mac] = {"mac": mac, "ip": ip, "hostname": hn}
+    # wifi assoc counts (best-effort)
+    wifi_assoc = {"wl0": 0, "wl1": 0, "wl2": 0}
+    bands = (t.get("wifi") or {}).get("bands") or {}
+    for b in ("wl0","wl1","wl2"):
+        x = bands.get(b, {}) or {}
+        c = x.get("assoc_count") or x.get("assoc") or 0
+        try:
+            c = int(c)
+        except Exception:
+            c = 0
+        wifi_assoc[b] = c
+    return by_mac, len(leases), wifi_assoc, t
+
+def main() -> int:
+    out_json = Path(os.getenv("OUT_JSON", "/var/lib/netguard/router_findings.json"))
+    tel_path = Path(os.getenv("TEL_JSON", "/var/lib/netguard/router_telemetry.json"))
+    inv_path = Path(os.getenv("INVENTORY_JSON", "/var/lib/netguard/router_inventory.json"))
+    base_path= Path(os.getenv("BASELINE_JSON", "/var/lib/netguard/router_baseline.json"))
+
+    out = {
+        "generated_at": now_iso(),
+        "ok": True,
+        "error": "",
+        "alerts": [],
+        "summary": {},
+        "details": {},
+        "changes": {"new_devices": [], "gone_devices": []},
+    }
+
+    try:
+        lan, res_by_mac, inv = load_inventory(inv_path)
+        tele_by_mac, lease_count, wifi_assoc, tel_raw = load_telemetry(tel_path)
+
+        # baseline compare (optional)
+        base = read_json(base_path, {})
+        base_macs = set((base.get("devices") or {}).keys())
+        cur_macs  = set(tele_by_mac.keys())
+
+        new_devices = sorted(cur_macs - base_macs)
+        gone_devices = sorted(base_macs - cur_macs)
+
+        # active off-lan leaks (source-of-truth)
+        leaks = []
+        for mac, v in tele_by_mac.items():
+            ip = v.get("ip","")
+            try:
+                if ip and ip_address(ip) not in lan:
+                    leaks.append({"mac": mac, "ip": ip, "hostname": v.get("hostname","")})
+            except Exception:
+                pass
+
+        # reserved drift
+        drift = []
+        for mac, r in res_by_mac.items():
+            if mac in tele_by_mac:
+                got = tele_by_mac[mac].get("ip","")
+                want= r.get("ip","")
+                if got and want and got != want:
+                    drift.append({"name": r.get("name",""), "mac": mac, "want": want, "got": got, "hostname": tele_by_mac[mac].get("hostname","")})
+
+        # unknown devices (present in telemetry but not in reservations)
+        unknown = []
+        for mac, v in tele_by_mac.items():
+            if mac not in res_by_mac:
+                unknown.append({
+                    "mac": mac,
+                    "ip": v.get("ip",""),
+                    "hostname": v.get("hostname",""),
+                    "likely_private_mac": is_locally_administered(mac),
+                })
+
+        # alerts
+        if leaks:
+            out["alerts"].append({
+                "severity": "high",
+                "kind": "off_lan_ip",
+                "count": len(leaks),
+                "examples": [f'{x["ip"]} {x["mac"]}' for x in leaks[:8]],
+            })
+        if drift:
+            out["alerts"].append({
+                "severity": "medium",
+                "kind": "reserved_ip_drift",
+                "count": len(drift),
+                "examples": [f'{x["name"]} want={x["want"]} got={x["got"]}' for x in drift[:8]],
+            })
+        if unknown:
+            # split private-mac vs not
+            priv = [u for u in unknown if u.get("likely_private_mac")]
+            nonp = [u for u in unknown if not u.get("likely_private_mac")]
+            if nonp:
+                out["alerts"].append({
+                    "severity": "medium",
+                    "kind": "unknown_device",
+                    "count": len(nonp),
+                    "examples": [f'{x["ip"]} {x["mac"]} {x.get("hostname","")}'.strip() for x in nonp[:8]],
+                })
+            if priv:
+                out["alerts"].append({
+                    "severity": "low",
+                    "kind": "unknown_private_mac",
+                    "count": len(priv),
+                    "examples": [f'{x["ip"]} {x["mac"]} {x.get("hostname","")}'.strip() for x in priv[:8]],
+                })
+
+        # baseline-only info (no severity)
+        out["changes"]["new_devices"] = new_devices
+        out["changes"]["gone_devices"] = gone_devices
+
+        out["summary"] = {
+            "lan_cidr": str(lan),
+            "dhcp_leases": lease_count,
+            "wifi_assoc": wifi_assoc,
+            "reserved_count": len(res_by_mac),
+            "unknown_count": len(unknown),
+            "drift_count": len(drift),
+            "off_lan_count": len(leaks),
+            "baseline_new": len(new_devices),
+            "baseline_gone": len(gone_devices),
+        }
+
+        out["details"] = {
+            "off_lan": leaks,
+            "reserved_drift": drift,
+            "unknown": unknown,
+        }
+
+        write_json(out_json, out)
+        return 0
+
+    except Exception as e:
+        out["ok"] = False
+        out["error"] = str(e)
+        try:
+            write_json(out_json, out)
+        except Exception:
+            pass
+        return 2
+
+if __name__ == "__main__":
+    raise SystemExit(main())

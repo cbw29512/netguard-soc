@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NetGuard SOC AI - Real Network Data</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/cyberpunk.css') }}">
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+</head>
+<body>
+    <div class="marquee-container">
+        <div class="marquee-content" id="aiThoughts">
+            <span class="thought">🤖 AI Security Guard Initializing...</span>
+        </div>
+    </div>
+
+    <div class="dashboard">
+        <div class="header">
+            <h1 class="glitch" data-text="NETGUARD SOC AI">NETGUARD SOC AI</h1>
+            <div class="subtitle">REAL DATA STREAM - NO SIMULATION</div>
+            <div class="status-bar">
+                <span class="status-item" id="statusTelemetry">TELEMETRY: <span class="loading">...</span></span>
+                <span class="status-item" id="statusAI">AI GUARD: <span class="loading">...</span></span>
+                <span class="status-item" id="statusHealth">HEALTH: <span class="loading">...</span></span>
+                <span class="status-item" id="statusUpdate">LAST UPDATE: <span class="loading">...</span></span>
+            </div>
+        </div>
+
+        <div class="device-grid" id="deviceGrid">
+            <div class="loading-message">📡 Connecting to real data stream...</div>
+        </div>
+    </div>
+
+    <div class="footer">
+        <div class="process-status">
+            <span class="process" id="procTelemetry">📡 TELEMETRY</span>
+            <span class="process" id="procSyslog">📋 SYSLOG</span>
+            <span class="process" id="procAnomaly">🔍 ANOMALY</span>
+            <span class="process" id="procAI">🤖 AI GUARD</span>
+            <span class="process" id="procHealth">💚 HEALTH</span>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/soc_dashboard.js') }}"></script>
+</body>
+</html>

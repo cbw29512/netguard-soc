@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+import os, json, re, subprocess
+from pathlib import Path
+from datetime import datetime, timezone
+
+ENVF = Path("/opt/netguard/sensors/router_clients.env")
+OUT_DIR = Path("/var/lib/netguard")
+OUT_JSON = OUT_DIR / "router_telemetry.json"
+
+KEY = Path("/var/lib/netguard/keys/netguard_router_ed25519")
+KNOWN = Path("/var/lib/netguard/ssh_known_hosts")
+
+def utc_now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+def load_env_file(p: Path) -> dict:
+    env={}
+    for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+        line=line.strip()
+        if not line or line.startswith("#") or "=" not in line: 
+            continue
+        k,v=line.split("=",1)
+        env[k.strip()] = v.strip().strip('"').strip("'")
+    return env
+
+def run_ssh(host: str, user: str, port: str) -> str:
+    cmd = [
+        "ssh",
+        "-p", str(port),
+        "-i", str(KEY),
+        "-o", f"UserKnownHostsFile={KNOWN}",
+        "-o", "StrictHostKeyChecking=yes",
+        "-o", "BatchMode=yes",
+        "-o", "PreferredAuthentications=publickey",
+        "-o", "ConnectTimeout=6",
+        f"{user}@{host}",
+        "sh", "-s"
+    ]
+
+    # Remote script prints BLOCK markers; we parse locally.
+    remote = r'''
+echo "__UNAME__"
+uname -a 2>/dev/null || true
+echo "__UPTIME__"
+uptime 2>/dev/null || true
+echo "__LOADAVG__"
+cat /proc/loadavg 2>/dev/null || true
+echo "__MEMINFO__"
+cat /proc/meminfo 2>/dev/null || true
+
+echo "__LEASES__"
+for f in /var/lib/misc/dnsmasq.leases /tmp/dnsmasq.leases /var/run/dnsmasq.leases; do
+  if [ -f "$f" ]; then
+    cat "$f"
+    break
+  fi
+done 2>/dev/null || true
+
+echo "__ARP__"
+cat /proc/net/arp 2>/dev/null || true
+
+WL=""
+if [ -x /usr/sbin/wl ]; then WL="/usr/sbin/wl"; fi
+if [ -z "$WL" ] && command -v wl >/dev/null 2>&1; then WL="$(command -v wl)"; fi
+
+echo "__WIFI__"
+echo "WL_PATH=$WL"
+
+for b in 0 1 2; do
+  echo "BAND=wl$b"
+  # status (for band label)
+  if [ -n "$WL" ]; then
+    st="$("$WL" -i "wl$b" status 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g')"
+    [ -n "$st" ] && echo "STATUS wl$b $st"
+  fi
+
+  # discover ifnames via nvram (base + vifs)
+  for sfx in "" ".1" ".2" ".3" ".4" ".5" ".6" ".7"; do
+    v="$(nvram get "wl${b}${sfx}_ifname" 2>/dev/null || true)"
+    [ -n "$v" ] && echo "IFNAME $v"
+  done | awk '!seen[$0]++'
+
+  # assoc list per discovered ifname
+  if [ -n "$WL" ]; then
+    for sfx in "" ".1" ".2" ".3" ".4" ".5" ".6" ".7"; do
+      ifn="$(nvram get "wl${b}${sfx}_ifname" 2>/dev/null || true)"
+      [ -z "$ifn" ] && continue
+      macs="$("$WL" -i "$ifn" assoclist 2>/dev/null | awk '{print $2}' | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g')"
+      echo "ASSOC $ifn $macs"
+    done
+  fi
+done
+
+echo "__END__"
+'''
+    p = subprocess.run(cmd, input=remote.encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if p.returncode != 0:
+        raise RuntimeError(p.stderr.decode(errors="replace").strip() or f"ssh rc={p.returncode}")
+    return p.stdout.decode("utf-8", errors="replace")
+
+def parse_blocks(txt: str) -> dict:
+    # Split by markers like __UNAME__
+    blocks={}
+    cur=None
+    buf=[]
+    for line in txt.splitlines():
+        m = re.match(r'^__(\w+)__$', line.strip())
+        if m:
+            if cur is not None:
+                blocks[cur] = "\n".join(buf).strip("\n")
+            cur = m.group(1)
+            buf=[]
+        else:
+            buf.append(line)
+    if cur is not None:
+        blocks[cur] = "\n".join(buf).strip("\n")
+    return blocks
+
+def parse_leases(s: str):
+    out=[]
+    for ln in s.splitlines():
+        ln=ln.strip()
+        if not ln: continue
+        parts = ln.split()
+        # dnsmasq: expiry mac ip hostname clientid
+        if len(parts) < 4: continue
+        expiry, mac, ip, hostname = parts[:4]
+        clientid = parts[4] if len(parts) >= 5 else ""
+        try: expiry = int(expiry)
+        except Exception: expiry = 0
+        out.append({
+            "expiry_epoch": expiry,
+            "mac": mac.lower(),
+            "ip": ip,
+            "hostname": hostname if hostname != "*" else "",
+            "clientid": clientid
+        })
+    return out
+
+def parse_arp(s: str):
+    rows=[]
+    lines=[ln for ln in s.splitlines() if ln.strip()]
+    if not lines: return rows
+    # /proc/net/arp header: IP address HW type Flags HW address Mask Device
+    for ln in lines[1:]:
+        parts=ln.split()
+        if len(parts) < 6: continue
+        ip, hwtype, flags, mac, mask, dev = parts[:6]
+        rows.append({"ip": ip, "mac": mac.lower(), "device": dev, "flags": flags})
+    return rows
+
+def parse_wifi(s: str):
+    bands={}
+    wl_path=""
+    cur_band=None
+    ifnames=[]
+    assoc_map={}
+    status_map={}
+    for ln in s.splitlines():
+        ln=ln.strip()
+        if not ln: continue
+        if ln.startswith("WL_PATH="):
+            wl_path = ln.split("=",1)[1].strip()
+        elif ln.startswith("BAND="):
+            cur_band = ln.split("=",1)[1].strip()
+            ifnames=[]
+            assoc_map={}
+            status_map={}
+            bands[cur_band] = {"wl_path": wl_path, "ifnames": [], "assoc_macs": [], "assoc_count": 0, "active_ifnames": [], "status": ""}
+        elif ln.startswith("STATUS ") and cur_band:
+            # STATUS wl1 <...>
+            status = ln.split(" ",2)[2] if len(ln.split(" ",2))==3 else ""
+            bands[cur_band]["status"] = status
+        elif ln.startswith("IFNAME ") and cur_band:
+            v = ln.split(" ",1)[1].strip()
+            if v and v not in ifnames:
+                ifnames.append(v)
+                bands[cur_band]["ifnames"] = ifnames[:]
+        elif ln.startswith("ASSOC ") and cur_band:
+            parts = ln.split()
+            if len(parts) >= 2:
+                ifn = parts[1]
+                macs = [m.lower() for m in parts[2:] if re.match(r'^[0-9a-f]{2}(:[0-9a-f]{2}){5}$', m.lower())]
+                assoc_map[ifn] = macs
+    # finalize: unique macs + active_ifnames counts
+    for b, x in bands.items():
+        all_macs=set()
+        active=[]
+        for ifn in x.get("ifnames",[]):
+            macs = assoc_map.get(ifn, [])
+            for m in macs: all_macs.add(m)
+            if macs:
+                active.append({"ifname": ifn, "assoc": len(macs)})
+        x["assoc_macs"] = sorted(all_macs)
+        x["assoc_count"] = len(all_macs)
+        x["active_ifnames"] = sorted(active, key=lambda d: d["assoc"], reverse=True)
+        # band label hint from status text
+        st = x.get("status","")
+        label = ""
+        m = re.search(r'(?i)\bBand:\s*([0-9.]+G)\b', st)
+        if m: label = m.group(1)
+        x["band_label"] = label
+    return {"bands": bands}
+
+def main():
+    out = {"generated_at": utc_now_iso(), "ok": False, "error": "", "router_host":"", "router_user":"", "router":{}, "clients":{}, "wifi":{}, "net":{}}
+    try:
+        env = load_env_file(ENVF)
+        host = env.get("ROUTER_HOST","192.168.50.1")
+        user = env.get("ROUTER_USER","nucboxr")
+        port = env.get("ROUTER_SSH_PORT","22")
+        out["router_host"]=host
+        out["router_user"]=user
+
+        txt = run_ssh(host, user, port)
+        blocks = parse_blocks(txt)
+
+        out["router"] = {
+            "uname": blocks.get("UNAME",""),
+            "uptime": blocks.get("UPTIME",""),
+            "loadavg": blocks.get("LOADAVG",""),
+            "meminfo": blocks.get("MEMINFO",""),
+        }
+
+        leases = parse_leases(blocks.get("LEASES",""))
+        arp = parse_arp(blocks.get("ARP",""))
+        out["clients"] = {"dhcp_leases": leases, "arp": arp}
+        out["wifi"] = parse_wifi(blocks.get("WIFI",""))
+
+        out["ok"] = True
+    except Exception as e:
+        out["ok"] = False
+        out["error"] = str(e)
+
+    OUT_JSON.write_text(json.dumps(out, indent=2))
+
+    print(json.dumps({"ok": out["ok"], "error": out.get("error",""), "out": str(OUT_JSON)}))
+
+if __name__ == "__main__":
+    main()

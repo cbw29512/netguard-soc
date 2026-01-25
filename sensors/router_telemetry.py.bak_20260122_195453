@@ -1,0 +1,243 @@
+#!/usr/bin/env python3
+import json, os, re, sqlite3, subprocess
+from datetime import datetime, timezone
+from pathlib import Path
+
+OUT_JSON = Path(os.environ.get("OUT_JSON", "/var/lib/netguard/router_telemetry.json"))
+DB_PATH  = Path(os.environ.get("DB", "/var/lib/netguard/router_telemetry.sqlite"))
+
+ROUTER_HOST = os.environ.get("ROUTER_HOST", "192.168.50.1").strip()
+ROUTER_USER = os.environ.get("ROUTER_USER", "nucboxr").strip()
+
+KEY   = os.environ.get("KEY_PATH", "/var/lib/netguard/keys/netguard_router_ed25519").strip()
+KNOWN = os.environ.get("KNOWN_HOSTS", "/var/lib/netguard/ssh_known_hosts").strip()
+
+SSH_BASE = [
+    "ssh",
+    "-i", KEY,
+    "-o", f"UserKnownHostsFile={KNOWN}",
+    "-o", "StrictHostKeyChecking=yes",
+    "-o", "BatchMode=yes",
+    "-o", "ConnectTimeout=5",
+    "-o", "PreferredAuthentications=publickey",
+]
+
+MAC_RE = re.compile(r"([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})")
+
+def utc_now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+def run_ssh(cmd: str) -> str:
+    full = SSH_BASE + [f"{ROUTER_USER}@{ROUTER_HOST}", cmd]
+    p = subprocess.run(full, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if p.returncode != 0:
+        raise RuntimeError(f"ssh rc={p.returncode}: {p.stderr.strip()}")
+    return p.stdout
+
+def parse_dnsmasq_leases(text: str):
+    out = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        expiry = int(parts[0]) if parts[0].isdigit() else None
+        mac = parts[1].lower()
+        ip  = parts[2]
+        host = parts[3] if parts[3] != "*" else ""
+        cid = parts[4] if len(parts) >= 5 else ""
+        out.append({"expiry_epoch": expiry, "mac": mac, "ip": ip, "hostname": host, "clientid": cid})
+    return out
+
+def parse_arp(text: str):
+    out = []
+    lines = (text or "").splitlines()
+    for line in lines[1:]:
+        cols = line.split()
+        if len(cols) < 6:
+            continue
+        ip, hw_type, flags, mac, mask, dev = cols[:6]
+        out.append({"ip": ip, "mac": mac.lower(), "dev": dev, "flags": flags})
+    return out
+
+def parse_proc_net_dev(text: str):
+    out = {}
+    lines = (text or "").splitlines()
+    for line in lines[2:]:
+        if ":" not in line:
+            continue
+        iface, rest = line.split(":", 1)
+        iface = iface.strip()
+        vals = rest.split()
+        if len(vals) < 16:
+            continue
+        rx_bytes, rx_pkts, rx_err, rx_drop = map(int, vals[0:4])
+        tx_bytes, tx_pkts, tx_err, tx_drop = map(int, vals[8:12])
+        out[iface] = {
+            "rx_bytes": rx_bytes, "rx_pkts": rx_pkts, "rx_err": rx_err, "rx_drop": rx_drop,
+            "tx_bytes": tx_bytes, "tx_pkts": tx_pkts, "tx_err": tx_err, "tx_drop": tx_drop,
+        }
+    return out
+
+def parse_assoclist(text: str):
+    macs = []
+    for line in (text or "").splitlines():
+        m = MAC_RE.search(line)
+        if m:
+            macs.append(m.group(1).lower())
+    seen=set(); out=[]
+    for m in macs:
+        if m not in seen:
+            seen.add(m); out.append(m)
+    return out
+
+def ensure_db():
+    con = sqlite3.connect(str(DB_PATH))
+    con.execute("PRAGMA journal_mode=WAL;")
+    con.execute("""
+      CREATE TABLE IF NOT EXISTS router_samples (
+        ts TEXT PRIMARY KEY,
+        json TEXT NOT NULL
+      );
+    """)
+    con.commit()
+    con.close()
+
+def insert_sample(ts: str, payload: dict):
+    con = sqlite3.connect(str(DB_PATH))
+    con.execute("PRAGMA journal_mode=WAL;")
+    con.execute("INSERT OR REPLACE INTO router_samples(ts,json) VALUES(?,?)", (ts, json.dumps(payload)))
+    con.commit()
+    con.close()
+
+def find_wl_path():
+    wl = run_ssh("command -v wl 2>/dev/null || echo ''").strip()
+    if wl:
+        return wl
+    wl = run_ssh("for p in /usr/sbin/wl /sbin/wl /usr/bin/wl /bin/wl; do [ -x \"$p\" ] && echo \"$p\" && break; done").strip()
+    return wl or ""
+
+def nvram_ifname_map():
+    txt = run_ssh(r"nvram show 2>/dev/null | grep -E '^wl[0-2](\.[0-9]+)?_ifname=' | head -n 80 || true")
+    m = {}
+    for line in txt.splitlines():
+        line=line.strip()
+        if not line or "=" not in line:
+            continue
+        k,v = line.split("=",1)
+        m[k.strip()] = v.strip()
+    return m
+
+def main():
+    out = {
+        "generated_at": utc_now_iso(),
+        "router_host": ROUTER_HOST,
+        "router_user": ROUTER_USER,
+        "ok": False,
+        "error": "",
+        "router": {},
+        "clients": {},
+        "wifi": {"bands": {}},
+        "net": {},
+    }
+
+    try:
+        out["router"]["uname"]   = run_ssh("uname -a 2>/dev/null || cat /proc/version 2>/dev/null || true").strip()
+        out["router"]["uptime"]  = run_ssh("uptime 2>/dev/null || cat /proc/uptime 2>/dev/null || true").strip()
+        out["router"]["loadavg"] = run_ssh("cat /proc/loadavg 2>/dev/null || true").strip()
+        out["router"]["meminfo"] = run_ssh("cat /proc/meminfo 2>/dev/null | head -n 60 || true")
+
+        leases_txt = run_ssh("cat /var/lib/misc/dnsmasq.leases 2>/dev/null || true")
+        arp_txt    = run_ssh("cat /proc/net/arp 2>/dev/null || true")
+        out["clients"]["dhcp_leases"] = parse_dnsmasq_leases(leases_txt)
+        out["clients"]["arp_table"]   = parse_arp(arp_txt)
+
+        wl_path = find_wl_path()
+        out["wifi"]["wl_path"] = wl_path
+
+        # base ifnames (still useful)
+        wl0 = run_ssh("nvram get wl0_ifname 2>/dev/null || true").strip()
+        wl1 = run_ssh("nvram get wl1_ifname 2>/dev/null || true").strip()
+        wl2 = run_ssh("nvram get wl2_ifname 2>/dev/null || true").strip()
+        out["wifi"]["wl_ifnames"] = {"wl0": wl0, "wl1": wl1, "wl2": wl2}
+
+        # discover *all* wlX(.Y)_ifname values
+        ifmap = nvram_ifname_map()
+        out["wifi"]["ifname_map"] = ifmap
+
+        band_ifnames = {"wl0": [], "wl1": [], "wl2": []}
+        # include discovered map
+        for k,v in ifmap.items():
+            if k.startswith("wl0"):
+                band_ifnames["wl0"].append(v)
+            elif k.startswith("wl1"):
+                band_ifnames["wl1"].append(v)
+            elif k.startswith("wl2"):
+                band_ifnames["wl2"].append(v)
+
+        # ensure base ifnames included first
+        for band, base in (("wl0", wl0), ("wl1", wl1), ("wl2", wl2)):
+            if base and base not in band_ifnames[band]:
+                band_ifnames[band].insert(0, base)
+
+        # de-dupe each band while preserving order
+        for band in band_ifnames:
+            seen=set(); uniq=[]
+            for x in band_ifnames[band]:
+                if x and x not in seen:
+                    seen.add(x); uniq.append(x)
+            band_ifnames[band]=uniq
+
+        # collect assoc macs (union) and keep per-ifname breakdown
+        for band in ("wl0","wl1","wl2"):
+            band_obj = {"ifnames": band_ifnames[band], "assoc_macs": [], "per_ifname": {}, "note": ""}
+            if not wl_path:
+                band_obj["note"] = "wl not found on router PATH"
+            elif not band_obj["ifnames"]:
+                band_obj["note"] = "no ifnames discovered"
+            else:
+                union=[]
+                seen=set()
+                for ifn in band_obj["ifnames"]:
+                    txt = run_ssh(f"{wl_path} -i {ifn} assoclist 2>/dev/null || true")
+                    macs = parse_assoclist(txt)
+                    band_obj["per_ifname"][ifn] = macs
+                    for m in macs:
+                        if m not in seen:
+                            seen.add(m); union.append(m)
+                band_obj["assoc_macs"] = union
+                if not union:
+                    band_obj["note"] = "assoclist empty across discovered ifnames"
+            out["wifi"]["bands"][band] = band_obj
+
+        # conntrack
+        ct_count = run_ssh("cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null || echo ''").strip()
+        ct_max   = run_ssh("cat /proc/sys/net/netfilter/nf_conntrack_max   2>/dev/null || echo ''").strip()
+        try:
+            out["net"]["conntrack"] = {"count": int(ct_count), "max": int(ct_max)}
+        except Exception:
+            out["net"]["conntrack"] = {"count": None, "max": None}
+
+        # interface counters
+        dev_txt = run_ssh("cat /proc/net/dev 2>/dev/null || true")
+        out["net"]["if_counters"] = parse_proc_net_dev(dev_txt)
+
+        out["ok"] = True
+
+    except Exception as e:
+        out["ok"] = False
+        out["error"] = str(e)
+
+    tmp = OUT_JSON.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(out, indent=2), encoding="utf-8")
+    tmp.replace(OUT_JSON)
+
+    ensure_db()
+    insert_sample(out["generated_at"], out)
+
+    print(json.dumps({"ok": out["ok"], "generated_at": out["generated_at"], "error": out["error"][:160]}))
+
+if __name__ == "__main__":
+    main()

@@ -2,24 +2,27 @@ services:
   influxdb:
     image: influxdb:2.7
     container_name: netguard-influxdb
-    restart: unless-stopped
-    env_file:
-      - ./secrets/enterprise.env
-    volumes:
-      - /var/lib/netguard/enterprise/influxdb:/var/lib/influxdb2
     ports:
       - "8086:8086"
+    volumes:
+      - ./influxdb/data:/var/lib/influxdb2
+      - ./influxdb/config:/etc/influxdb2
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=netguard
+      - DOCKER_INFLUXDB_INIT_PASSWORD=netguardpassword
+      - DOCKER_INFLUXDB_INIT_ORG=netguard
+      - DOCKER_INFLUXDB_INIT_BUCKET=network_stats
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=a4cd19967eab33610a7f98e09267a6e68ad949b1b1f14ef9b4355b95cd1bf831
+    restart: unless-stopped
 
   grafana:
     image: grafana/grafana:latest
     container_name: netguard-grafana
-    restart: unless-stopped
-    env_file:
-      - ./secrets/enterprise.env
-    volumes:
-      - /var/lib/netguard/enterprise/grafana:/var/lib/grafana
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
     ports:
       - "3000:3000"
+    volumes:
+      - ./grafana/data:/var/lib/grafana
     depends_on:
       - influxdb
+    restart: unless-stopped

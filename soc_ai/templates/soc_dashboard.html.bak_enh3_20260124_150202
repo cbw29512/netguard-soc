@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NetGuard SOC | Unified Command Center</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/cyberpunk.css') }}">
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+</head>
+<body>
+    <!-- AI THOUGHTS MARQUEE HEADER -->
+    <header class="ai-header">
+        <div class="ai-marquee">
+            <div class="marquee-track" id="aiMarquee">
+                <span class="thought">🛡️ NETGUARD AI INITIALIZING...</span>
+            </div>
+        </div>
+        <div class="header-stats">
+            <div class="stat-box" id="routerStat">
+                <span class="stat-label">ROUTER</span>
+                <span class="stat-value" id="routerUptime">--</span>
+            </div>
+            <div class="stat-box" id="deviceStat">
+                <span class="stat-label">DEVICES</span>
+                <span class="stat-value" id="deviceCount">--</span>
+            </div>
+            <div class="stat-box" id="alertStat">
+                <span class="stat-label">ALERTS</span>
+                <span class="stat-value" id="alertCount">--</span>
+            </div>
+            <div class="stat-box" id="memoryStat">
+                <span class="stat-label">ROUTER MEM</span>
+                <span class="stat-value" id="memUsage">--</span>
+            </div>
+            <div class="stat-box" id="riskStat">
+                <span class="stat-label">RISK</span>
+                <span class="stat-value" id="riskScore">--</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- MAIN CONTENT -->
+    <main class="dashboard">
+        <!-- WiFi Bands Status Bar -->
+        <section class="wifi-bands" id="wifiBands">
+            <div class="band-card" data-band="wl0">
+                <div class="band-icon">📶</div>
+                <div class="band-info">
+                    <div class="band-label">2.4 GHz</div>
+                    <div class="band-util">--% util</div>
+                    <div class="band-count">-- devices</div>
+                </div>
+            </div>
+            <div class="band-card" data-band="wl1">
+                <div class="band-icon">📶</div>
+                <div class="band-info">
+                    <div class="band-label">5 GHz</div>
+                    <div class="band-util">--% util</div>
+                    <div class="band-count">-- devices</div>
+                </div>
+            </div>
+            <div class="band-card" data-band="wl2">
+                <div class="band-icon">📶</div>
+                <div class="band-info">
+                    <div class="band-label">6 GHz</div>
+                    <div class="band-util">--% util</div>
+                    <div class="band-count">-- devices</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Device Grid -->
+        <section class="device-grid" id="deviceGrid">
+            <div class="loading-card">
+                <div class="spinner"></div>
+                <p>Connecting to router telemetry...</p>
+            </div>
+        </section>
+    </main>
+
+    <!-- DEVICE DETAIL MODAL -->
+    <div class="device-modal-overlay" id="deviceModalOverlay">
+        <div class="device-modal">
+            <div class="modal-header">
+                <div>
+                    <div class="modal-title" id="modalDeviceName">Device Name</div>
+                    <div class="modal-subtitle" id="modalDeviceIP">192.168.50.x</div>
+                </div>
+                <div style="display:flex;align-items:center;gap:16px;">
+                    <div class="live-indicator">
+                        <span class="live-dot"></span>
+                        LIVE DATA
+                    </div>
+                    <button class="modal-close" id="modalClose">✕</button>
+                </div>
+            </div>
+            <div class="modal-body" id="modalBody">
+                <!-- Populated by JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- STICKY FOOTER - SERVICE STATUS -->
+    <footer class="service-footer">
+        <div class="footer-title">
+            <span class="pulse-dot"></span>
+            <span class="version-tag" id="socVersion">v3.2.1</span>
+            NETGUARD SERVICES
+        </div>
+        <div class="service-grid" id="serviceGrid">
+            <!-- Services populated by JS -->
+        </div>
+    </footer>
+
+    <script src="{{ url_for('static', filename='js/soc_dashboard.js') }}"></script>
+</body>
+</html>

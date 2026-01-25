@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+# NETGUARD_WIFI_SCAN_PARSER_V2
+from __future__ import annotations
+
+import json, os, re, subprocess
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+STATE_DIR = Path(os.getenv("STATE_DIR", "/var/lib/netguard"))
+OUT = STATE_DIR / "wifi_scan.json"
+
+WIFI24_IFACE = os.getenv("WIFI24_IFACE", "wlx00c0cab95938")
+WIFI5_IFACE  = os.getenv("WIFI5_IFACE",  "wlx00c0caafbb83")
+REGDOMAIN    = os.getenv("REGDOMAIN", "US")
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+def run(cmd: List[str], timeout: float = 20.0) -> Tuple[int, str]:
+    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=timeout)
+    return p.returncode, p.stdout
+
+def freq_to_band(freq_mhz: int) -> str:
+    return "2.4" if freq_mhz < 3000 else "5"
+
+def freq_to_channel(freq_mhz: int) -> Optional[int]:
+    if 2412 <= freq_mhz <= 2472:
+        return (freq_mhz - 2407) // 5
+    if freq_mhz == 2484:
+        return 14
+    if 5000 <= freq_mhz <= 5900:
+        return (freq_mhz - 5000) // 5
+    return None
+
+def parse_iw_scan(txt: str, iface: str) -> List[Dict[str, Any]]:
+    nets: List[Dict[str, Any]] = []
+
+    # Each block begins with "BSS <mac>" and runs until next "BSS" or end
+    for m in re.finditer(r"(?ms)^BSS\s+([0-9a-f:]{17}).*?(?=^BSS\s|\Z)", txt, re.IGNORECASE):
+        block = m.group(0)
+        bssid = m.group(1).lower()
+
+        # freq may be "2427.0" or "2427"
+        mf = re.search(r"(?m)^\s*freq:\s*([0-9]+(?:\.[0-9]+)?)\s*$", block)
+        if not mf:
+            continue
+        freq_mhz = int(float(mf.group(1)))
+
+        ms = re.search(r"(?m)^\s*signal:\s*([-\d\.]+)\s*dBm", block)
+        signal_dbm = int(float(ms.group(1))) if ms else -100
+
+        msid = re.search(r"(?m)^\s*SSID:\s*(.*)$", block)
+        ssid = (msid.group(1).strip() if msid else "") or "<hidden>"
+
+        ch = freq_to_channel(freq_mhz)
+        if ch is None:
+            mds = re.search(r"(?m)^\s*DS Parameter set:\s*channel\s*(\d+)\s*$", block)
+            if mds:
+                try:
+                    ch = int(mds.group(1))
+                except Exception:
+                    pass
+
+        nets.append({
+            "ssid": ssid[:64],
+            "bssid": bssid,
+            "freq_mhz": freq_mhz,
+            "signal_dbm": signal_dbm,
+            "channel": ch,
+            "band": freq_to_band(freq_mhz),
+            "source_iface": iface,
+        })
+
+    return nets
+
+def scan_iface(iface: str) -> Dict[str, Any]:
+    if not iface:
+        return {"ok": False, "rc": 2, "error": "empty iface", "count": 0}
+
+    rc, out = run(["iw", "dev", iface, "scan", "-u"], timeout=22.0)
+    if rc != 0:
+        return {"ok": False, "rc": rc, "error": "iw scan failed", "count": 0, "output_head": out[:900]}
+
+    nets = parse_iw_scan(out, iface)
+    return {"ok": True, "rc": 0, "count": len(nets), "nets": nets, "output_head": out[:400] if len(nets) == 0 else ""}
+
+def atomic_write_json(path: Path, data: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+def main() -> int:
+    # Best-effort set reg domain (not fatal if blocked)
+    try:
+        run(["iw", "reg", "set", REGDOMAIN], timeout=4.0)
+    except Exception:
+        pass
+
+    meta: Dict[str, Any] = {"generated_at": utc_now_iso(), "ifaces": {}, "note": "iw scan (managed mode)."}
+    networks: List[Dict[str, Any]] = []
+
+    for iface in [WIFI24_IFACE, WIFI5_IFACE]:
+        res = scan_iface(iface)
+        meta["ifaces"][iface] = {k: v for k, v in res.items() if k not in ("nets",)}
+        networks.extend(res.get("nets", []))
+
+    networks.sort(key=lambda x: int(x.get("signal_dbm", -100)), reverse=True)
+    payload = {"generated_at": meta["generated_at"], "networks": networks, "meta": meta}
+    atomic_write_json(OUT, payload)
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

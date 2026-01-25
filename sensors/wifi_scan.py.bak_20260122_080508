@@ -1,0 +1,57 @@
+import subprocess, json, os, re
+from datetime import datetime
+
+def capture_beacons(iface, band):
+    networks = {}
+    # Capture for 4 seconds, looking for 802.11 beacon frames
+    # -e: print link-level headers (BSSID/Signal)
+    # -s 256: get enough of the packet for the SSID
+    cmd = ["timeout", "4s", "tcpdump", "-i", iface, "-e", "-s", "256", "type", "mgt", "subtype", "beacon", "-n"]
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        stdout, _ = proc.communicate()
+        
+        for line in stdout.splitlines():
+            # Regex for SSID in tcpdump output: Beacon (MySSID)
+            m_ssid = re.search(r"Beacon \((.*?)\)", line)
+            # Regex for BSSID: BSSID:aa:bb:cc:dd:ee:ff
+            m_bssid = re.search(r"BSSID:([0-9a-f:]{17})", line, re.I)
+            # Regex for Signal: -45dBm
+            m_sig = re.search(r"(-?\d+)dBm", line)
+            
+            if m_bssid:
+                bssid = m_bssid.group(1).lower()
+                ssid = m_ssid.group(1) if m_ssid else "<hidden>"
+                sig = int(m_sig.group(1)) if m_sig else -100
+                
+                # Keep the strongest signal for each BSSID found
+                if bssid not in networks or sig > networks[bssid]["signal_dbm"]:
+                    networks[bssid] = {
+                        "ssid": ssid,
+                        "bssid": bssid,
+                        "signal_dbm": sig,
+                        "band": band,
+                        "last_seen": datetime.now().isoformat()
+                    }
+    except Exception as e:
+        print(f"Error on {iface}: {e}")
+        
+    return list(networks.values())
+
+def main():
+    mt_mon = os.environ.get("MT_MON", "mtmon0")
+    rtk_mon = os.environ.get("RTK_MON", "rtkmon0")
+    
+    nets_24 = capture_beacons(mt_mon, "2.4")
+    nets_5 = capture_beacons(rtk_mon, "5")
+    
+    output = {
+        "generated_at": datetime.now().isoformat(),
+        "networks": nets_24 + nets_5
+    }
+    
+    with open("/var/lib/netguard/wifi_scan.json", "w") as f:
+        json.dump(output, f, indent=2)
+
+if __name__ == "__main__":
+    main()

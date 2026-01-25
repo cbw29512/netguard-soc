@@ -38,6 +38,12 @@
 
     .cards{display:grid;grid-template-columns:1fr;gap:10px}
     .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:10px 12px}
+  .card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0,255,120,0.15) !important;
+    cursor: pointer;
+  }
+
     .card-top{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
     .card .ip{font-weight:800}
     .card .name{color:var(--muted);font-size:12px}
@@ -205,5 +211,1171 @@ async function refresh(){
 refresh();
 setInterval(refresh, 2000);
 </script>
+
+<!-- NETGUARD_FOOTER_AND_ROUTER_UI_V1 -->
+<style id="NETGUARD_FOOTER_PAD_V1">
+  body { padding-bottom: 64px; }
+  .ng-footer{position:fixed;left:0;right:0;bottom:0;height:52px;display:flex;align-items:center;gap:10px;padding:0 14px;z-index:9999;border-top:1px solid rgba(255,255,255,.10);backdrop-filter:blur(10px);background:rgba(5,10,18,.82);}
+  .ng-pill{border-radius:999px;padding:6px 10px;font-size:12px;line-height:1;white-space:nowrap;border:1px solid rgba(255,255,255,.14);}
+  .ng-up{background:rgba(20,160,80,.25);} .ng-down{background:rgba(220,40,60,.30);} .ng-warn{background:rgba(200,150,20,.30);} .ng-muted{opacity:.75;}
+  .ng-flex{display:flex;gap:8px;align-items:center;overflow:auto;}
+  .ng-router-box{margin-top:14px;border-radius:14px;border:1px solid rgba(255,255,255,.10);background:rgba(8,14,24,.55);padding:14px;}
+  .ng-router-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;}
+  .ng-router-card{border-radius:12px;border:1px solid rgba(255,255,255,.10);background:rgba(0,0,0,.35);padding:10px;min-height:72px;}
+  .ng-router-title{font-size:14px;font-weight:700;opacity:.95;}
+  .ng-router-small{font-size:12px;opacity:.80;margin-top:4px;}
+  .ng-pre{font-size:12px;opacity:.85;overflow:auto;max-height:220px;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.35);margin-top:10px;}
+</style>
+
+<div class="ng-router-box" id="ngRouterSentinel">
+  <div class="ng-router-title">Router Sentinel (Live)</div>
+  <div class="ng-router-small ng-muted">Last refresh: <span id="ngRouterLast">never</span></div>
+
+  <div class="ng-router-grid">
+    <div class="ng-router-card">
+      <div class="ng-router-title">Risk</div>
+      <div class="ng-router-small">Level: <b id="ngRiskLevel">?</b> &nbsp; Score: <b id="ngRiskScore">?</b></div>
+      <div class="ng-router-small">Telemetry age: <b id="ngAgeTel">?</b>s &nbsp; Findings age: <b id="ngAgeFind">?</b>s &nbsp; AI age: <b id="ngAgeAi">?</b>s</div>
+    </div>
+    <div class="ng-router-card">
+      <div class="ng-router-title">Counts</div>
+      <div class="ng-router-small">Leases: <b id="ngLeases">?</b> &nbsp; Unknown: <b id="ngUnknown">?</b> &nbsp; Drift: <b id="ngDrift">?</b> &nbsp; Off-LAN: <b id="ngOfflan">?</b></div>
+      <div class="ng-router-small">Wi-Fi assoc: wl0=<b id="ngWl0">?</b> wl1=<b id="ngWl1">?</b> wl2=<b id="ngWl2">?</b></div>
+    </div>
+  </div>
+
+  <details style="margin-top:10px;">
+    <summary class="ng-router-small">Alerts / Recommended actions</summary>
+    <div class="ng-pre" id="ngAlerts">Loading…</div>
+    <div class="ng-pre" id="ngActions">Loading…</div>
+  </details>
+</div>
+
+<div class="ng-footer" id="ngFooter">
+  <div class="ng-pill ng-muted" id="ngFooterVersion">SOC v?</div>
+  <div class="ng-pill ng-muted">Services:</div>
+  <div class="ng-flex" id="ngFooterPills"><span class="ng-pill ng-warn">Loading…</span></div>
+  <div class="ng-pill ng-muted" style="margin-left:auto;">Footer refresh: <span id="ngFooterLast">never</span></div>
+</div>
+
+<script>
+(function(){
+  function fmtAge(x){ if(x===null||x===undefined) return "?"; const n=Math.round(Number(x)); return Number.isFinite(n)?String(n):"?"; }
+  function isoNow(){ return new Date().toISOString(); }
+  function pillClass(active){ if(active==="active") return "ng-up"; if(active==="inactive"||active==="failed") return "ng-down"; return "ng-warn"; }
+
+  async function pollRouter(){
+    try{
+      const r=await fetch("/api/router",{cache:"no-store"});
+      if(!r.ok) throw new Error("router api http "+r.status);
+      const j=await r.json();
+      document.getElementById("ngRouterLast").textContent=isoNow();
+      document.getElementById("ngRiskLevel").textContent=(j.summary&&j.summary.risk_level)||"?";
+      document.getElementById("ngRiskScore").textContent=(j.summary&&j.summary.risk)??"?";
+      const st=(j.summary&&j.summary.stale)||{};
+      document.getElementById("ngAgeTel").textContent=fmtAge(st.telemetry_age_s);
+      document.getElementById("ngAgeFind").textContent=fmtAge(st.findings_age_s);
+      document.getElementById("ngAgeAi").textContent=fmtAge(st.ai_age_s);
+
+      const summ=(j.summary&&j.summary.summary)||{};
+      document.getElementById("ngLeases").textContent=summ.dhcp_leases??"?";
+      document.getElementById("ngUnknown").textContent=summ.unknown_count??"?";
+      document.getElementById("ngDrift").textContent=summ.drift_count??"?";
+      document.getElementById("ngOfflan").textContent=summ.off_lan_count??"?";
+      const wifi=summ.wifi_assoc||{};
+      document.getElementById("ngWl0").textContent=(wifi.wl0??"?");
+      document.getElementById("ngWl1").textContent=(wifi.wl1??"?");
+      document.getElementById("ngWl2").textContent=(wifi.wl2??"?");
+
+      const alerts=(j.summary&&j.summary.alerts)||[];
+      document.getElementById("ngAlerts").textContent=JSON.stringify(alerts,null,2);
+      const ai=(j.router&&j.router.ai)||{};
+      const actions=ai.recommended_actions||[];
+      document.getElementById("ngActions").textContent=JSON.stringify(actions,null,2);
+
+      const v=(j.soc_version||"").trim();
+      if(v) document.getElementById("ngFooterVersion").textContent="SOC v"+v;
+    }catch(e){
+      document.getElementById("ngRouterLast").textContent="ERROR";
+      document.getElementById("ngAlerts").textContent=String(e);
+    }
+  }
+
+  async function pollServices(){
+    try{
+      const r=await fetch("/api/services",{cache:"no-store"});
+      if(!r.ok) throw new Error("services api http "+r.status);
+      const j=await r.json();
+      document.getElementById("ngFooterLast").textContent=isoNow();
+      const v=(j.soc_version||"").trim();
+      if(v) document.getElementById("ngFooterVersion").textContent="SOC v"+v;
+
+      const host=document.getElementById("ngFooterPills");
+      host.innerHTML="";
+      const units=j.units||[];
+      for(const u of units){
+        const span=document.createElement("span");
+        span.className="ng-pill "+pillClass(u.active);
+        span.title=(u.desc?u.desc+" ":"")+(u.sub?("("+u.sub+")"):"");
+        span.textContent=u.unit.replace(".service","").replace(".timer","")+":"+ (u.active||"unknown");
+        host.appendChild(span);
+      }
+      if(units.length===0){
+        const span=document.createElement("span");
+        span.className="ng-pill ng-warn";
+        span.textContent="No units configured";
+        host.appendChild(span);
+      }
+    }catch(e){
+      document.getElementById("ngFooterLast").textContent="ERROR";
+      const host=document.getElementById("ngFooterPills");
+      host.innerHTML="";
+      const span=document.createElement("span");
+      span.className="ng-pill ng-down";
+      span.textContent="services ERROR";
+      span.title=String(e);
+      host.appendChild(span);
+    }
+  }
+
+  pollRouter(); pollServices();
+  setInterval(pollRouter, 5000);
+  setInterval(pollServices, 4000);
+})();
+</script>
+
+
+
+<!-- NETGUARD_STICKY_FOOTER_PILLS_V1 -->
+<!-- patched v2: self-healing footer renderer -->
+<style>
+  .ng-sticky-footer-row{display:flex;justify-content:center;align-items:center;gap:10px;flex-wrap:wrap}
+  .ng-svc-pill{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;font-size:12px;letter-spacing:.2px;
+               padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.18);
+               background:rgba(0,0,0,.35);backdrop-filter:blur(6px);user-select:none}
+  .ng-svc-pill.up{outline:1px solid rgba(0,255,120,.20)}
+  .ng-svc-pill.down{outline:1px solid rgba(255,70,70,.25)}
+  .ng-svc-pill .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;vertical-align:middle}
+  .ng-svc-pill.up .dot{background:rgba(0,255,120,.85)}
+  .ng-svc-pill.down .dot{background:rgba(255,70,70,.9)}
+</style>
+<script>
+(() => {
+  function toArray(json){
+    if (Array.isArray(json)) return json;
+    if (json && Array.isArray(json.services)) return json.services;
+    if (json && Array.isArray(json.data)) return json.data;
+    return [];
+  }
+  function isUp(s){
+    if (s && typeof s.ok === 'boolean') return s.ok;
+    if (s && typeof s.up === 'boolean') return s.up;
+    const st = String((s && (s.status || s.state)) || '').toLowerCase();
+    return ['ok','up','healthy','running','pass','active'].includes(st);
+  }
+  function label(s){
+    const name = (s && (s.display || s.name || s.service || s.id || s.title)) || 'service';
+    const st = (s && (s.status || s.state)) ? String(s.status || s.state) : (isUp(s) ? 'UP' : 'DOWN');
+    return `${name}: ${st}`;
+  }
+
+  function ensureFooterRow(){
+    let footer = document.querySelector('.sticky-footer') || document.querySelector('#stickyFooter') || document.querySelector('footer');
+    if (!footer){
+      footer = document.createElement('div');
+      footer.className = 'sticky-footer';
+      footer.style.position = 'fixed';
+      footer.style.left = '0';
+      footer.style.right = '0';
+      footer.style.bottom = '0';
+      footer.style.zIndex = '9999';
+      footer.style.padding = '10px 12px';
+      footer.style.background = 'rgba(0,0,0,.55)';
+      document.body.appendChild(footer);
+    }
+
+    let row = document.getElementById('ngStickyFooterRow');
+    if (!row || !footer.contains(row)){
+      // Something overwrote the footer; rebuild it.
+      footer.innerHTML = '';
+      row = document.createElement('div');
+      row.id = 'ngStickyFooterRow';
+      row.className = 'ng-sticky-footer-row';
+      footer.appendChild(row);
+    }
+    return row;
+  }
+
+  async function tick(){
+    const row = ensureFooterRow();
+    try{
+      const r = await fetch('/api/services', {cache:'no-store'});
+      const j = await r.json();
+      const services = toArray(j);
+
+      row.innerHTML = '';
+      for (const svc of services){
+        const pill = document.createElement('span');
+        const up = isUp(svc);
+        pill.className = 'ng-svc-pill ' + (up ? 'up' : 'down');
+
+        const dot = document.createElement('span');
+        dot.className = 'dot';
+        pill.appendChild(dot);
+
+        const text = document.createElement('span');
+        text.textContent = label(svc);
+        pill.appendChild(text);
+
+        row.appendChild(pill);
+      }
+
+      if (services.length === 0){
+        row.innerHTML = '<span class="ng-svc-pill down"><span class="dot"></span><span>No services returned</span></span>';
+      }
+    } catch(e){
+      row.innerHTML = '<span class="ng-svc-pill down"><span class="dot"></span><span>Services: ERROR</span></span>';
+    }
+  }
+
+  tick();
+  setInterval(tick, 2000);
+})();
+</script>
+
+<!-- NETGUARD_ALERTS_PANEL_V1 -->
+<style>
+  /* Floating Alerts button */
+  #ngAlertsBtn{
+    position:fixed; right:16px; bottom:64px; z-index:99999;
+    display:flex; align-items:center; gap:10px;
+    font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;
+    font-size:12px; letter-spacing:.3px;
+    padding:10px 12px; border-radius:999px;
+    border:1px solid rgba(255,255,255,.18);
+    background:rgba(0,0,0,.45); backdrop-filter:blur(8px);
+    cursor:pointer; user-select:none;
+  }
+  #ngAlertsBadge{
+    min-width:22px; height:22px; border-radius:999px;
+    display:inline-flex; align-items:center; justify-content:center;
+    font-weight:700;
+    border:1px solid rgba(255,255,255,.18);
+    background:rgba(255,70,70,.20);
+  }
+
+  /* Modal overlay */
+  #ngAlertsModal.ng-hidden{display:none}
+  #ngAlertsModal{
+    position:fixed; inset:0; z-index:99998;
+    background:rgba(0,0,0,.62); backdrop-filter:blur(2px);
+    display:flex; align-items:center; justify-content:center;
+    padding:18px;
+  }
+  .ng-alerts-card{
+    width:min(980px, 96vw);
+    max-height:min(86vh, 900px);
+    overflow:hidden;
+    border-radius:16px;
+    border:1px solid rgba(255,255,255,.14);
+    background:rgba(10,10,12,.86);
+    box-shadow:0 20px 60px rgba(0,0,0,.55);
+    display:flex; flex-direction:column;
+  }
+  .ng-alerts-top{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:14px 16px;
+    border-bottom:1px solid rgba(255,255,255,.10);
+  }
+  .ng-alerts-top h3{
+    margin:0; font-size:14px; letter-spacing:.4px;
+    font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;
+  }
+  .ng-alerts-top .ng-sub{
+    opacity:.75; font-size:12px; margin-left:10px;
+  }
+  .ng-alerts-close{
+    cursor:pointer; border-radius:10px;
+    padding:8px 10px;
+    border:1px solid rgba(255,255,255,.14);
+    background:rgba(0,0,0,.35);
+    color:#fff;
+  }
+  .ng-alerts-body{
+    overflow:auto;
+    padding:12px 12px 14px;
+  }
+
+  .ng-alert{
+    border:1px solid rgba(255,255,255,.10);
+    border-radius:14px;
+    padding:12px 12px 10px;
+    margin:10px 0;
+    background:rgba(0,0,0,.22);
+  }
+  .ng-alert-head{
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+  }
+  .ng-alert-left{display:flex; align-items:center; gap:10px; min-width:0}
+  .ng-pill{
+    font-size:11px; padding:4px 8px; border-radius:999px;
+    border:1px solid rgba(255,255,255,.14);
+    background:rgba(255,255,255,.06);
+    text-transform:uppercase; letter-spacing:.35px;
+    white-space:nowrap;
+  }
+  .ng-pill.warning{outline:1px solid rgba(255,200,50,.22)}
+  .ng-pill.error,.ng-pill.critical{outline:1px solid rgba(255,70,70,.28)}
+  .ng-pill.suggestion{outline:1px solid rgba(80,170,255,.22)}
+
+  .ng-alert-title{
+    font-size:13px; font-weight:650;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .ng-alert-meta{
+    opacity:.7; font-size:12px; white-space:nowrap;
+  }
+
+  .ng-alert-actions{
+    display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end;
+  }
+  .ng-btn{
+    cursor:pointer;
+    font-size:12px;
+    padding:6px 10px;
+    border-radius:10px;
+    border:1px solid rgba(255,255,255,.14);
+    background:rgba(0,0,0,.32);
+    color:#fff;
+  }
+  .ng-btn.danger{outline:1px solid rgba(255,70,70,.28)}
+  .ng-btn.good{outline:1px solid rgba(0,255,120,.20)}
+  .ng-btn.info{outline:1px solid rgba(80,170,255,.22)}
+
+  .ng-alert-detail{
+    margin-top:10px;
+    padding-top:10px;
+    border-top:1px dashed rgba(255,255,255,.12);
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:12px;
+    white-space:pre-wrap;
+    opacity:.92;
+  }
+</style>
+
+<button id="ngAlertsBtn" title="Open Alerts">
+  ALERTS
+  <span id="ngAlertsBadge">0</span>
+</button>
+
+<div id="ngAlertsModal" class="ng-hidden" role="dialog" aria-modal="true" aria-label="Alerts">
+  <div class="ng-alerts-card">
+    <div class="ng-alerts-top">
+      <div style="display:flex; align-items:baseline; gap:10px;">
+        <h3>NetGuard Alerts</h3>
+        <div class="ng-sub" id="ngAlertsSub">Loading…</div>
+      </div>
+      <button class="ng-alerts-close" id="ngAlertsClose">Close</button>
+    </div>
+    <div class="ng-alerts-body" id="ngAlertsList"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const btn = document.getElementById("ngAlertsBtn");
+  const badge = document.getElementById("ngAlertsBadge");
+  const modal = document.getElementById("ngAlertsModal");
+  const closeBtn = document.getElementById("ngAlertsClose");
+  const list = document.getElementById("ngAlertsList");
+  const sub = document.getElementById("ngAlertsSub");
+
+  let lastPayload = null;
+
+  function esc(s){ return (s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+  async function apiGetAlerts(){
+    const r = await fetch("/api/alerts", {cache:"no-store"});
+    if(!r.ok) throw new Error("alerts http " + r.status);
+    return await r.json();
+  }
+  async function apiPost(path){
+    const r = await fetch(path, {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"});
+    if(!r.ok) throw new Error("post http " + r.status);
+    return await r.json();
+  }
+
+  function render(payload){
+    lastPayload = payload;
+    const alerts = (payload && payload.alerts) ? payload.alerts : [];
+    const openCount = (payload && typeof payload.open_count === "number")
+      ? payload.open_count
+      : alerts.filter(a => (a.status||"open")==="open").length;
+
+    badge.textContent = String(openCount);
+    sub.textContent = `${openCount} open • ${alerts.length} total`;
+
+    list.innerHTML = alerts.map(a => {
+      const lvl = (a.level||"warning").toLowerCase();
+      const status = (a.status||"open").toLowerCase();
+      const requiresAdmin = !!a.requires_admin;
+      const id = a.id;
+
+      const meta = `${esc(a.source||"")}${a.timestamp ? " • "+esc(a.timestamp) : ""}${status!=="open" ? " • "+esc(status) : ""}`;
+      const detail = esc(a.detail||"");
+
+      const aiDetail = a.ai_detail ? esc(JSON.stringify(a.ai_detail, null, 2)) : "";
+
+      const adminBtn = (requiresAdmin && status==="open")
+        ? `<button class="ng-btn good" data-act="approve" data-id="${id}">Admin Approval</button>`
+        : "";
+
+      return `
+        <div class="ng-alert" data-id="${id}">
+          <div class="ng-alert-head">
+            <div class="ng-alert-left" style="min-width:0;">
+              <span class="ng-pill ${lvl}">${esc(lvl)}</span>
+              <div style="min-width:0;">
+                <div class="ng-alert-title">${esc(a.title||"(untitled alert)")}</div>
+                <div class="ng-alert-meta">${meta}</div>
+              </div>
+            </div>
+
+            <div class="ng-alert-actions">
+              <button class="ng-btn info" data-act="ai" data-id="${id}">Ask AI</button>
+              <button class="ng-btn" data-act="reset" data-id="${id}">Reset</button>
+              ${adminBtn}
+              <button class="ng-btn" data-act="dismiss" data-id="${id}">Dismiss</button>
+              <button class="ng-btn danger" data-act="delete" data-id="${id}">Delete</button>
+            </div>
+          </div>
+
+          <div class="ng-alert-detail">
+DETAIL:
+${detail}
+
+${a.ai_detail ? "AI_DETAIL:\n"+aiDetail : "(No AI detail yet — click “Ask AI”.)"}
+          </div>
+        </div>
+      `;
+    }).join("");
+
+    if(alerts.length === 0){
+      list.innerHTML = `<div style="opacity:.75; font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif; padding:12px;">
+        No alerts right now. 🎉
+      </div>`;
+    }
+  }
+
+  async function refresh(){
+    try{
+      const payload = await apiGetAlerts();
+      render(payload);
+    }catch(e){
+      sub.textContent = "Alerts API error — check /api/alerts";
+      // keep badge unchanged if API down
+      console.warn(e);
+    }
+  }
+
+  // Click handlers
+  btn.addEventListener("click", async () => {
+    modal.classList.remove("ng-hidden");
+    await refresh();
+  });
+  closeBtn.addEventListener("click", () => modal.classList.add("ng-hidden"));
+  modal.addEventListener("click", (e) => { if(e.target === modal) modal.classList.add("ng-hidden"); });
+
+  list.addEventListener("click", async (e) => {
+    const b = e.target.closest("button[data-act]");
+    if(!b) return;
+    const act = b.getAttribute("data-act");
+    const id = b.getAttribute("data-id");
+    try{
+      if(act === "dismiss") await apiPost(`/api/alerts/${id}/dismiss`);
+      if(act === "delete")  await apiPost(`/api/alerts/${id}/delete`);
+      if(act === "reset")   await apiPost(`/api/alerts/${id}/reset`);
+      if(act === "approve") await apiPost(`/api/alerts/${id}/approve`);
+      if(act === "ai")      await apiPost(`/api/alerts/${id}/ai_expand`);
+      await refresh();
+    }catch(err){
+      console.error(err);
+      sub.textContent = "Action failed — check SOC logs";
+    }
+  });
+
+  // Background badge refresh (so you see count change without opening modal)
+  setInterval(async () => {
+    try{
+      const payload = await apiGetAlerts();
+      const openCount = (payload && typeof payload.open_count === "number")
+        ? payload.open_count
+        : (payload.alerts||[]).filter(a => (a.status||"open")==="open").length;
+      badge.textContent = String(openCount);
+    }catch(_){}
+  }, 2500);
+
+  // initial badge load
+  refresh();
+})();
+</script>
+
+
+<!-- NETGUARD_ALERTS_UI_WIREUP_V2 -->
+<style>
+  /* Alerts pill in sticky footer (matches service pills) */
+  .ng-alert-pill{cursor:pointer}
+  .ng-alert-pill .count{
+    margin-left:8px; padding:2px 7px; border-radius:999px;
+    border:1px solid rgba(255,255,255,.18);
+    background:rgba(0,0,0,.35);
+    font-size:11px;
+  }
+  .ng-alert-pill.hot{outline:1px solid rgba(255,70,70,.30)}
+  .ng-alert-pill.warm{outline:1px solid rgba(255,200,70,.25)}
+  /* Modal */
+  #ngAlertsModal{position:fixed; inset:0; z-index:100000; display:none}
+  #ngAlertsModal .backdrop{position:absolute; inset:0; background:rgba(0,0,0,.55)}
+  #ngAlertsModal .panel{
+    position:absolute; left:50%; top:10%;
+    transform:translateX(-50%);
+    width:min(980px, 94vw); max-height:80vh; overflow:auto;
+    border:1px solid rgba(255,255,255,.14);
+    border-radius:16px;
+    background:rgba(10,10,12,.92);
+    backdrop-filter:blur(10px);
+    box-shadow:0 12px 60px rgba(0,0,0,.55);
+    padding:14px;
+    font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;
+    color:rgba(255,255,255,.92);
+  }
+  #ngAlertsModal .topbar{display:flex; align-items:center; justify-content:space-between; gap:10px}
+  #ngAlertsModal .title{font-size:14px; letter-spacing:.3px}
+  #ngAlertsModal .btn{
+    cursor:pointer; user-select:none;
+    padding:7px 10px; border-radius:10px;
+    border:1px solid rgba(255,255,255,.14);
+    background:rgba(255,255,255,.06);
+    font-size:12px;
+  }
+  #ngAlertsModal .btn:hover{background:rgba(255,255,255,.10)}
+  #ngAlertsModal .list{margin-top:12px; display:flex; flex-direction:column; gap:10px}
+  .ngAlertRow{
+    border:1px solid rgba(255,255,255,.10);
+    border-radius:14px;
+    padding:10px;
+    background:rgba(255,255,255,.03);
+  }
+  .ngAlertHead{display:flex; align-items:flex-start; justify-content:space-between; gap:10px}
+  .ngAlertMeta{display:flex; flex-direction:column; gap:4px}
+  .ngAlertTitle{font-size:13px}
+  .ngAlertSub{font-size:11px; opacity:.85}
+  .ngAlertBadge{display:inline-flex; align-items:center; gap:8px; font-size:11px; opacity:.95}
+  .ngDot{width:9px;height:9px;border-radius:50%}
+  .ngDot.info{background:rgba(120,180,255,.95)}
+  .ngDot.suggestion{background:rgba(150,255,160,.95)}
+  .ngDot.warning{background:rgba(255,200,80,.95)}
+  .ngDot.error,.ngDot.critical{background:rgba(255,90,90,.95)}
+  .ngAlertActions{display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end}
+  .ngAlertBody{margin-top:8px; font-size:12px; opacity:.92; line-height:1.35}
+  .ngAIDetail{
+    margin-top:8px; padding:10px; border-radius:12px;
+    border:1px solid rgba(255,255,255,.10);
+    background:rgba(0,0,0,.25);
+    white-space:pre-wrap; font-size:12px;
+  }
+  .ngStatusPill{
+    display:inline-flex; align-items:center;
+    padding:2px 8px; border-radius:999px;
+    border:1px solid rgba(255,255,255,.14);
+    background:rgba(0,0,0,.25);
+  }
+</style>
+
+<div id="ngAlertsModal">
+  <div class="backdrop"></div>
+  <div class="panel" role="dialog" aria-modal="true">
+    <div class="topbar">
+      <div class="title">🚨 Alerts & AI Findings</div>
+      <div style="display:flex; gap:10px; align-items:center;">
+        <div id="ngAlertsSummary" style="font-size:12px; opacity:.85;"></div>
+        <div class="btn" id="ngAlertsClose">Close</div>
+      </div>
+    </div>
+    <div class="list" id="ngAlertsList"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const API_ALERTS = "/api/alerts";
+
+  function el(tag, cls){ const e=document.createElement(tag); if(cls) e.className=cls; return e; }
+
+  function ensureFooterAlertsPill(){
+    const footerRow = document.querySelector('.ng-sticky-footer-row');
+    if(!footerRow) return null;
+
+    let pill = document.getElementById('ngAlertsPill');
+    if(pill) return pill;
+
+    pill = el('div','ng-svc-pill ng-alert-pill');
+    pill.id = "ngAlertsPill";
+    pill.title = "Open Alerts panel";
+    pill.innerHTML = '<span class="dot"></span><span>ALERTS</span><span class="count" id="ngAlertsCount">0</span>';
+    footerRow.appendChild(pill);
+    pill.addEventListener('click', () => openAlerts());
+    return pill;
+  }
+
+  function showModal(show){
+    const m = document.getElementById('ngAlertsModal');
+    if(!m) return;
+    m.style.display = show ? 'block' : 'none';
+  }
+
+  function openAlerts(){
+    showModal(true);
+    refreshAlerts(true);
+  }
+
+  function closeAlerts(){
+    showModal(false);
+  }
+
+  function statusSortKey(s){
+    s=(s||"open").toLowerCase();
+    if(s==="open") return 0;
+    if(s==="approved") return 1;
+    if(s==="dismissed") return 2;
+    if(s==="deleted") return 3;
+    return 9;
+  }
+
+  async function postJson(url, body){
+    const r = await fetch(url, {
+      method:"POST",
+      headers: {"Content-Type":"application/json"},
+      body: body ? JSON.stringify(body) : "{}",
+      cache:"no-store"
+    });
+    const t = await r.text();
+    try{ return JSON.parse(t); } catch(e){ return {ok:false, error:"non-json", raw:t, status:r.status}; }
+  }
+
+  function dotClass(level){
+    level=(level||"info").toLowerCase();
+    if(level==="critical") return "critical";
+    if(level==="error") return "error";
+    if(level==="warning") return "warning";
+    if(level==="suggestion") return "suggestion";
+    return "info";
+  }
+
+  async function askAI(a){
+    const id = a.id;
+    const out = await postJson(`/api/alerts/${id}/ask_ai`, {
+      title: a.title, detail: a.detail, level: a.level, source: a.source
+    });
+    return out;
+  }
+
+  async function refreshAlerts(forceRender){
+    const pill = ensureFooterAlertsPill();
+    let data = null;
+    try{
+      const r = await fetch(API_ALERTS, {cache:"no-store"});
+      const t = await r.text();
+      data = JSON.parse(t);
+    }catch(e){
+      // if API fails, still show something
+      if(pill){
+        pill.classList.remove("hot","warm");
+        const c = document.getElementById('ngAlertsCount');
+        if(c) c.textContent = "?";
+      }
+      return;
+    }
+
+    const alerts = (data.alerts || []).slice().sort((a,b)=>statusSortKey(a.status)-statusSortKey(b.status));
+    const openCount = Number(data.open_count || 0);
+
+    // Update pill count + severity styling
+    if(pill){
+      const c = document.getElementById('ngAlertsCount');
+      if(c) c.textContent = String(openCount);
+      pill.classList.remove("hot","warm");
+      if(openCount >= 3) pill.classList.add("hot");
+      else if(openCount >= 1) pill.classList.add("warm");
+    }
+
+    // Update summary
+    const summary = document.getElementById('ngAlertsSummary');
+    if(summary){
+      summary.textContent = `${openCount} actionable open • ${alerts.length} total`;
+    }
+
+    // Render modal list if open (or forced)
+    const modal = document.getElementById('ngAlertsModal');
+    const isOpen = modal && modal.style.display !== "none";
+    if(!isOpen && !forceRender) return;
+
+    const list = document.getElementById('ngAlertsList');
+    if(!list) return;
+    list.innerHTML = "";
+
+    if(alerts.length === 0){
+      const empty = el('div','ngAlertRow');
+      empty.textContent = "No alerts right now.";
+      list.appendChild(empty);
+      return;
+    }
+
+    for(const a of alerts){
+      const row = el('div','ngAlertRow');
+
+      const head = el('div','ngAlertHead');
+      const meta = el('div','ngAlertMeta');
+
+      const title = el('div','ngAlertTitle');
+      title.textContent = a.title || a.detail || "(untitled)";
+
+      const sub = el('div','ngAlertSub');
+      const lvl = (a.level||"info").toUpperCase();
+      const src = (a.source||"").toString();
+      const ts  = (a.timestamp||"").toString();
+      const st  = (a.status||"open").toString();
+      const needs = a.requires_admin ? " • ADMIN" : "";
+      sub.innerHTML = `<span class="ngAlertBadge"><span class="ngDot ${dotClass(a.level)}"></span>${lvl}</span> • ${src}${needs} • <span class="ngStatusPill">${st}</span> • ${ts}`;
+
+      meta.appendChild(title);
+      meta.appendChild(sub);
+
+      const actions = el('div','ngAlertActions');
+
+      // Admin approve (only if requires_admin and still open)
+      if(a.requires_admin && (a.status||"open")==="open"){
+        const b = el('div','btn'); b.textContent="Admin approval";
+        b.addEventListener('click', async ()=>{
+          await postJson(`/api/alerts/${a.id}/approve`, {title:a.title,detail:a.detail,level:a.level,source:a.source});
+          refreshAlerts(true);
+        });
+        actions.appendChild(b);
+      }
+
+      // Ask AI
+      const aiBtn = el('div','btn'); aiBtn.textContent="Ask AI";
+      aiBtn.addEventListener('click', async ()=>{
+        aiBtn.textContent="Asking…";
+        const out = await askAI(a);
+        aiBtn.textContent="Ask AI";
+        if(out && out.ai_detail){
+          refreshAlerts(true);
+        }
+      });
+      actions.appendChild(aiBtn);
+
+      // Dismiss
+      const dis = el('div','btn'); dis.textContent="Dismiss";
+      dis.addEventListener('click', async ()=>{
+        await postJson(`/api/alerts/${a.id}/dismiss`, {title:a.title,detail:a.detail,level:a.level,source:a.source});
+        refreshAlerts(true);
+      });
+      actions.appendChild(dis);
+
+      // Reset
+      const rst = el('div','btn'); rst.textContent="Reset";
+      rst.addEventListener('click', async ()=>{
+        await postJson(`/api/alerts/${a.id}/reset`, {title:a.title,detail:a.detail,level:a.level,source:a.source});
+        refreshAlerts(true);
+      });
+      actions.appendChild(rst);
+
+      // Delete
+      const del = el('div','btn'); del.textContent="Delete";
+      del.addEventListener('click', async ()=>{
+        await postJson(`/api/alerts/${a.id}/delete`, {title:a.title,detail:a.detail,level:a.level,source:a.source});
+        refreshAlerts(true);
+      });
+      actions.appendChild(del);
+
+      head.appendChild(meta);
+      head.appendChild(actions);
+
+      const body = el('div','ngAlertBody');
+      body.textContent = a.detail || "";
+
+      row.appendChild(head);
+      row.appendChild(body);
+
+      if(a.ai_detail){
+        const ai = el('div','ngAIDetail');
+        ai.textContent = a.ai_detail;
+        row.appendChild(ai);
+      }
+
+      list.appendChild(row);
+    }
+  }
+
+  // Wire modal close
+  document.addEventListener('DOMContentLoaded', ()=>{
+    ensureFooterAlertsPill();
+    const m = document.getElementById('ngAlertsModal');
+    const close = document.getElementById('ngAlertsClose');
+    if(close) close.addEventListener('click', closeAlerts);
+    if(m){
+      const bd = m.querySelector('.backdrop');
+      if(bd) bd.addEventListener('click', closeAlerts);
+      document.addEventListener('keydown', (e)=>{ if(e.key==="Escape") closeAlerts(); });
+    }
+    // initial refresh + periodic updates
+    refreshAlerts(false);
+    setInterval(()=>refreshAlerts(false), 5000);
+  });
+})();
+</script>
+
+
+<!-- NETGUARD_ALERTS_FETCH_REWRITE_V6 -->
+<script>
+(function(){
+  const _origFetch = window.fetch.bind(window);
+
+  function _tryJsonBody(init){
+    try{
+      if(!init || !init.body) return {};
+      if(typeof init.body === "string") return JSON.parse(init.body);
+    }catch(e){}
+    return {};
+  }
+
+  window.fetch = async function(resource, init){
+    try{
+      const url = (typeof resource === "string") ? resource : (resource && resource.url) ? resource.url : "";
+      const m = url.match(/\/api\/alerts\/([^\/]+)\/(approve|dismiss|reset|ai_detail)(\b|\?)/i);
+      if(m){
+        const id = m[1];
+        const action = m[2].toLowerCase();
+        const bodyObj = _tryJsonBody(init);
+        const payload = Object.assign({id, action}, bodyObj);
+
+        return _origFetch("/api/alerts_action", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify(payload),
+          cache: "no-store"
+        });
+      }
+    }catch(e){}
+    return _origFetch(resource, init);
+  };
+})();
+</script>
+
+
+<!-- NETGUARD_DEVICE_MODAL_V1 -->
+<style>
+  /* Make device cards visually clickable */
+  .card {
+    cursor: pointer !important;
+    transition: transform 0.12s ease, box-shadow 0.12s ease !important;
+  }
+  .device-card:hover, [class*="device-"]:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0,255,120,0.15) !important;
+  }
+
+  /* Device detail modal */
+  #ngDeviceModal { display:none; position:fixed; inset:0; z-index:999999; background:rgba(0,0,0,0.7); backdrop-filter:blur(4px); }
+  #ngDeviceModal.show { display:flex; align-items:center; justify-content:center; }
+  .ng-device-panel {
+    width:min(1200px, 94vw); max-height:86vh; overflow:hidden;
+    background:rgba(10,12,15,0.95); border:1px solid rgba(0,255,120,0.2);
+    border-radius:18px; box-shadow:0 20px 80px rgba(0,0,0,0.6);
+    display:flex; flex-direction:column;
+    font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif; color:#e8e8e8;
+  }
+  .ng-device-header {
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+    padding:16px 20px; border-bottom:1px solid rgba(255,255,255,0.1);
+  }
+  .ng-device-title { font-size:16px; font-weight:600; letter-spacing:0.3px; }
+  .ng-device-close { cursor:pointer; padding:8px 12px; border-radius:10px; border:1px solid rgba(255,255,255,0.12); background:rgba(255,255,255,0.05); font-size:13px; }
+  .ng-device-close:hover { background:rgba(255,255,255,0.10); }
+
+  .ng-device-tabs { display:flex; gap:4px; padding:12px 16px; border-bottom:1px solid rgba(255,255,255,0.08); background:rgba(0,0,0,0.25); }
+  .ng-device-tab { padding:8px 14px; border-radius:10px; cursor:pointer; font-size:13px; border:1px solid transparent; }
+  .ng-device-tab:hover { background:rgba(255,255,255,0.06); }
+  .ng-device-tab.active { background:rgba(0,255,120,0.12); border-color:rgba(0,255,120,0.25); font-weight:600; }
+
+  .ng-device-body { flex:1; overflow:auto; padding:16px 20px; }
+  .ng-device-section { margin-bottom:18px; }
+  .ng-device-section h4 { margin:0 0 10px; font-size:13px; opacity:0.8; text-transform:uppercase; letter-spacing:0.5px; }
+  .ng-device-kv { display:grid; grid-template-columns:140px 1fr; gap:8px 14px; font-size:13px; }
+  .ng-device-kv .k { opacity:0.7; }
+  .ng-device-kv .v { font-family:ui-monospace,monospace; }
+
+  .ng-device-actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:14px; }
+  .ng-device-btn { padding:9px 14px; border-radius:10px; border:1px solid rgba(255,255,255,0.14); background:rgba(255,255,255,0.04); cursor:pointer; font-size:13px; }
+  .ng-device-btn:hover { background:rgba(255,255,255,0.10); }
+  .ng-device-btn.danger { border-color:rgba(255,70,70,0.3); }
+  .ng-device-btn.good { border-color:rgba(0,255,120,0.25); }
+
+  .ng-flow-table { width:100%; border-collapse:collapse; font-size:12px; font-family:ui-monospace,monospace; }
+  .ng-flow-table th { text-align:left; padding:8px 10px; border-bottom:1px solid rgba(255,255,255,0.1); opacity:0.8; font-size:11px; text-transform:uppercase; letter-spacing:0.4px; }
+  .ng-flow-table td { padding:6px 10px; border-bottom:1px solid rgba(255,255,255,0.04); }
+  .ng-flow-table tr:hover { background:rgba(0,255,120,0.04); }
+</style>
+
+<div id="ngDeviceModal">
+  <div class="ng-device-panel">
+    <div class="ng-device-header">
+      <div class="ng-device-title" id="ngDeviceTitle">Device Details</div>
+      <div class="ng-device-close" id="ngDeviceClose">Close</div>
+    </div>
+
+    <div class="ng-device-tabs">
+      <div class="ng-device-tab active" data-tab="info">Info</div>
+      <div class="ng-device-tab" data-tab="traffic">Traffic</div>
+      <div class="ng-device-tab" data-tab="flows">Flows</div>
+      <div class="ng-device-tab" data-tab="actions">Actions</div>
+    </div>
+
+    <div class="ng-device-body">
+      <div id="ngDeviceTabContent"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  let currentDevice = null;
+
+  function openDeviceModal(dev){
+    currentDevice = dev;
+    const modal = document.getElementById('ngDeviceModal');
+    const title = document.getElementById('ngDeviceTitle');
+    if(!modal || !title) return;
+
+    title.textContent = dev.hostname || dev.name || dev.ip || 'Unknown Device';
+    modal.classList.add('show');
+    showTab('info');
+  }
+
+  function closeDeviceModal(){
+    const modal = document.getElementById('ngDeviceModal');
+    if(modal) modal.classList.remove('show');
+    currentDevice = null;
+  }
+
+  function showTab(tabName){
+    if(!currentDevice) return;
+
+    // Update active tab styling
+    document.querySelectorAll('.ng-device-tab').forEach(t => {
+      t.classList.toggle('active', t.getAttribute('data-tab') === tabName);
+    });
+
+    const content = document.getElementById('ngDeviceTabContent');
+    if(!content) return;
+
+    if(tabName === 'info'){
+      content.innerHTML = renderInfoTab(currentDevice);
+    } else if(tabName === 'traffic'){
+      content.innerHTML = renderTrafficTab(currentDevice);
+      loadTrafficGraph(currentDevice);
+    } else if(tabName === 'flows'){
+      content.innerHTML = '<div style="opacity:0.7;padding:20px;">Loading flows...</div>';
+      loadFlows(currentDevice);
+    } else if(tabName === 'actions'){
+      content.innerHTML = renderActionsTab(currentDevice);
+      wireActionButtons(currentDevice);
+    }
+  }
+
+  function renderInfoTab(dev){
+    return `
+      <div class="ng-device-section">
+        <h4>Device Information</h4>
+        <div class="ng-device-kv">
+          <div class="k">Hostname:</div><div class="v">${esc(dev.hostname || dev.name || '(unknown)')}</div>
+          <div class="k">IP Address:</div><div class="v">${esc(dev.ip || '—')}</div>
+          <div class="k">MAC Address:</div><div class="v">${esc(dev.mac || '—')}</div>
+          <div class="k">Vendor:</div><div class="v">${esc(dev.vendor || dev.manufacturer || '—')}</div>
+          <div class="k">Interface:</div><div class="v">${esc(dev.interface || dev.iface || '—')}</div>
+          <div class="k">Status:</div><div class="v">${esc(dev.status || 'unknown')}</div>
+          <div class="k">First Seen:</div><div class="v">${esc(dev.first_seen || '—')}</div>
+          <div class="k">Last Seen:</div><div class="v">${esc(dev.last_seen || '—')}</div>
+        </div>
+      </div>
+      <div class="ng-device-section">
+        <h4>Traffic Summary</h4>
+        <div class="ng-device-kv">
+          <div class="k">Total Bytes RX:</div><div class="v">${formatBytes(dev.bytes_rx || dev.rx_bytes || 0)}</div>
+          <div class="k">Total Bytes TX:</div><div class="v">${formatBytes(dev.bytes_tx || dev.tx_bytes || 0)}</div>
+          <div class="k">Total Packets:</div><div class="v">${formatNum(dev.packets || 0)}</div>
+          <div class="k">Total Flows:</div><div class="v">${formatNum(dev.flows || 0)}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderTrafficTab(dev){
+    return `
+      <div class="ng-device-section">
+        <h4>Traffic Over Time</h4>
+        <div id="ngTrafficGraph" style="opacity:0.7;padding:20px;">Loading graph...</div>
+      </div>
+    `;
+  }
+
+  function renderActionsTab(dev){
+    return `
+      <div class="ng-device-section">
+        <h4>Device Actions</h4>
+        <div class="ng-device-actions">
+          <button class="ng-device-btn good" data-action="label">Label Device</button>
+          <button class="ng-device-btn" data-action="cap">Cap Bandwidth</button>
+          <button class="ng-device-btn danger" data-action="quarantine">Quarantine</button>
+          <button class="ng-device-btn danger" data-action="block">Block Device</button>
+          <button class="ng-device-btn" data-action="scan">Run Port Scan</button>
+          <button class="ng-device-btn" data-action="history">View History</button>
+        </div>
+        <div id="ngActionResult" style="margin-top:14px; padding:12px; border-radius:10px; background:rgba(0,0,0,0.25); display:none;"></div>
+      </div>
+    `;
+  }
+
+  function wireActionButtons(dev){
+    document.querySelectorAll('[data-action]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const action = btn.getAttribute('data-action');
+        const result = document.getElementById('ngActionResult');
+        if(!result) return;
+
+        result.style.display = 'block';
+        result.textContent = `Executing ${action}...`;
+
+        try{
+          const resp = await fetch('/api/device_action', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({
+              action,
+              ip: dev.ip,
+              mac: dev.mac,
+              hostname: dev.hostname || dev.name
+            })
+          });
+          const data = await resp.json();
+          result.textContent = data.message || `Action "${action}" completed.`;
+        }catch(e){
+          result.textContent = `Action failed: ${e.message}`;
+        }
+      });
+    });
+  }
+
+  async function loadFlows(dev){
+    const content = document.getElementById('ngDeviceTabContent');
+    if(!content) return;
+
+    try{
+      const resp = await fetch(`/api/device_flows?ip=${encodeURIComponent(dev.ip || '')}&mac=${encodeURIComponent(dev.mac || '')}&limit=100`);
+      const data = await resp.json();
+      const flows = data.flows || [];
+
+      if(flows.length === 0){
+        content.innerHTML = '<div style="opacity:0.7;padding:20px;">No recent flows found.</div>';
+        return;
+      }
+
+      let html = '<div class="ng-device-section"><h4>Recent Flows (last 100)</h4><table class="ng-flow-table"><thead><tr>';
+      html += '<th>Time</th><th>Src</th><th>Dst</th><th>Port</th><th>Proto</th><th>Bytes</th><th>Pkts</th></tr></thead><tbody>';
+      for(const f of flows){
+        html += `<tr>
+          <td>${esc(f.timestamp||'—')}</td>
+          <td>${esc(f.src_ip||'—')}</td>
+          <td>${esc(f.dst_ip||'—')}</td>
+          <td>${esc(f.dst_port||'—')}</td>
+          <td>${esc(f.protocol||'—')}</td>
+          <td>${formatBytes(f.bytes||0)}</td>
+          <td>${formatNum(f.packets||0)}</td>
+        </tr>`;
+      }
+      html += '</tbody></table></div>';
+      content.innerHTML = html;
+    }catch(e){
+      content.innerHTML = `<div style="opacity:0.7;padding:20px;">Error loading flows: ${e.message}</div>`;
+    }
+  }
+
+  function loadTrafficGraph(dev){
+    // Placeholder - integrate with your existing charting library
+    const el = document.getElementById('ngTrafficGraph');
+    if(el) el.textContent = 'Traffic graph coming soon (integrate with existing chart.js/recharts)';
+  }
+
+  function esc(s){ return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  function formatBytes(b){ const u=['B','KB','MB','GB']; let i=0; while(b>=1024&&i<3){b/=1024;i++;} return b.toFixed(1)+' '+u[i]; }
+  function formatNum(n){ return String(n||0).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+
+  // Wire up modal close
+  document.addEventListener('DOMContentLoaded', () => {
+    const close = document.getElementById('ngDeviceClose');
+    const modal = document.getElementById('ngDeviceModal');
+    if(close) close.addEventListener('click', closeDeviceModal);
+    if(modal) modal.addEventListener('click', e => { if(e.target === modal) closeDeviceModal(); });
+    document.addEventListener('keydown', e => { if(e.key === 'Escape') closeDeviceModal(); });
+
+    // Wire tab switching
+    document.querySelectorAll('.ng-device-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        const tabName = tab.getAttribute('data-tab');
+        if(tabName) showTab(tabName);
+      });
+    });
+
+    // FIXED: Use event delegation on parent container (works with dynamic cards)
+  document.addEventListener('DOMContentLoaded', () => {
+    const cardsContainer = document.getElementById('cards');
+    if(!cardsContainer) {
+      console.warn('[NetGuard] Cards container not found');
+      return;
+    }
+
+    // Event delegation: ONE handler on parent catches all card clicks
+    cardsContainer.addEventListener('click', (e) => {
+      const card = e.target.closest('.card');
+      if(!card) return; // Not a card click
+      
+      // Extract device data from card structure
+      const ipEl = card.querySelector('.ip');
+      const nameEl = card.querySelector('.name');
+      const rxEl = card.querySelector('.rx');
+      const txEl = card.querySelector('.tx');
+      
+      const dev = {
+        ip: ipEl?.textContent?.trim() || 'unknown',
+        hostname: nameEl?.textContent?.trim() || ipEl?.textContent?.trim() || 'Unknown Device',
+        mac: '', // Not displayed in your current cards
+        status: 'online',
+        bytes_rx: rxEl?.textContent?.trim() || '0',
+        bytes_tx: txEl?.textContent?.trim() || '0'
+      };
+      
+      console.log('[NetGuard] Opening device modal:', dev);
+      openDeviceModal(dev);
+    });
+    
+    console.log('[NetGuard] Event delegation attached to #cards');
+  });
+
+  // Expose globally for manual testing
+  window.ngOpenDevice = openDeviceModal;
+})();
+</script>
+
 </body>
 </html>

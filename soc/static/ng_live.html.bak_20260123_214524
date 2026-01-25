@@ -1,0 +1,1034 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
+  <meta http-equiv="Pragma" content="no-cache"/>
+  <meta http-equiv="Expires" content="0"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>NetGuard SOC</title>
+
+  <!-- NETGUARD_SPA_RIGHTRAIL_V1_BEGIN -->
+  <style>
+    :root { --bg:#0b0f14; --panel:#111826; --panel2:#0f1623; --text:#e8eefc; --muted:#9fb0d0; --line:#22314a; }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;background:var(--bg);color:var(--text)}
+    a{color:inherit}
+    .sticky-header{position:sticky;top:0;z-index:5;background:linear-gradient(180deg,#0b0f14 0%, rgba(11,15,20,.92) 100%);border-bottom:1px solid var(--line)}
+    .header-inner{display:flex;align-items:center;gap:12px;padding:10px 14px}
+    .brand{font-weight:800;letter-spacing:.5px}
+    .marquee-wrap{flex:1;overflow:hidden;border:1px solid var(--line);background:var(--panel2);border-radius:10px;padding:6px 10px}
+    .marquee{white-space:nowrap;display:inline-block;animation:scroll 18s linear infinite;color:var(--muted);font-size:13px}
+    @keyframes scroll { from{transform:translateX(100%)} to{transform:translateX(-100%)} }
+
+    .page{display:grid;grid-template-columns: 1fr 420px;gap:14px;padding:14px;max-width:1400px;margin:0 auto}
+    .left-blank{min-height:280px;border:1px dashed rgba(255,255,255,.08);border-radius:14px;padding:12px;color:rgba(255,255,255,.35)}
+    .right-rail{display:flex;flex-direction:column;gap:12px}
+
+    .stream-grid{display:grid;grid-template-columns:1fr;gap:10px}
+    .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+    .panel-h{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid var(--line)}
+    .panel-h .t{font-weight:700;font-size:14px}
+    .panel-h .s{font-size:12px;color:var(--muted)}
+    .panel-b{padding:10px 12px}
+    .fixedbox{height:190px}
+    .scrollbox{height:150px;overflow:auto;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:12px;line-height:1.35;color:#d8e4ff}
+    .line{padding:2px 0;border-bottom:1px solid rgba(255,255,255,.05)}
+    .muted{color:var(--muted);font-size:12px}
+
+    .cards{display:grid;grid-template-columns:1fr;gap:10px}
+    .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:10px 12px}
+    .card-top{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
+    .card .ip{font-weight:800}
+    .card .name{color:var(--muted);font-size:12px}
+    .pill{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid rgba(255,255,255,.12);color:var(--muted)}
+
+    .sticky-footer{position:sticky;bottom:0;z-index:4;border-top:1px solid var(--line);background:rgba(11,15,20,.94);backdrop-filter: blur(8px)}
+    .footer-inner{display:flex;gap:14px;align-items:center;justify-content:space-between;padding:10px 14px}
+    .health{display:flex;gap:10px;align-items:center;font-size:12px;color:var(--muted)}
+    .dot{width:10px;height:10px;border-radius:50%;background:#666;display:inline-block}
+    .ok{background:#26d07c}
+    .bad{background:#ff4d4d}
+  </style>
+  <!-- NETGUARD_SPA_RIGHTRAIL_V1_END -->
+</head>
+
+<body>
+  <div class="sticky-header">
+    <div class="header-inner">
+      <div class="brand">NETGUARD SOC</div>
+      <div class="marquee-wrap"><div id="marquee" class="marquee">AI: waiting for sensor + RAG engine…</div></div>
+      <div class="muted" id="ts">--</div>
+    </div>
+  </div>
+
+  <div class="page">
+    <div class="left-blank">
+      (Reserved space — later we can add expanded AI drill-down without cluttering the dashboard.)
+    </div>
+
+    <div class="right-rail">
+      <div class="stream-grid">
+        <div class="panel fixedbox">
+          <div class="panel-h"><div class="t">Mirror Ethernet Stream</div><div class="s" id="mirror_meta">--</div></div>
+          <div class="panel-b"><div class="scrollbox" id="mirror_box"></div></div>
+        </div>
+
+        <div class="panel fixedbox">
+          <div class="panel-h"><div class="t">Wi-Fi 2.4 GHz Live</div><div class="s" id="wifi24_meta">--</div></div>
+          <div class="panel-b"><div class="scrollbox" id="wifi24_box"></div></div>
+        </div>
+
+        <div class="panel fixedbox">
+          <div class="panel-h"><div class="t">Wi-Fi 5 GHz Live</div><div class="s" id="wifi5_meta">--</div></div>
+          <div class="panel-b"><div class="scrollbox" id="wifi5_box"></div></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-h"><div class="t">IP Cards</div><div class="s" id="cards_meta">--</div></div>
+        <div class="panel-b">
+          <div id="cards" class="cards"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sticky-footer">
+    <div class="footer-inner">
+      <div class="health">
+        <span class="dot" id="dot_influx"></span> Influx
+        <span class="dot" id="dot_grafana"></span> Grafana
+      </div>
+      <div class="muted" id="footer_meta">Complete stack health (live)</div>
+    </div>
+  </div>
+
+<script>
+const API = (p) => p;
+const el = (id) => document.getElementById(id);
+
+function lineDiv(txt){
+  const d=document.createElement('div');
+  d.className='line';
+  d.textContent=txt;
+  return d;
+}
+
+function setDot(id, ok){
+  const d=el(id);
+  d.className = 'dot ' + (ok ? 'ok' : 'bad');
+}
+
+async function refresh(){
+  const now = new Date();
+  el('ts').textContent = now.toLocaleTimeString();
+
+  // AI thoughts (marquee)
+  try{
+    const r = await fetch(API('/api/ai_thoughts'), {cache:'no-store'});
+    const j = await r.json();
+    const msg = (j.lines && j.lines.length) ? j.lines.join('   |   ') : 'AI: waiting for sensor + RAG engine…';
+    el('marquee').textContent = msg;
+  }catch(e){}
+
+  // state + health + cards
+  try{
+    const r = await fetch(API('/api/state'), {cache:'no-store'});
+    const j = await r.json();
+
+    el('footer_meta').textContent = "Complete stack health (live) • " + (j.generated_at || '');
+    const h = j.stack_health || {};
+    setDot('dot_influx', !!(h.influx && h.influx.ok));
+    setDot('dot_grafana', !!(h.grafana && h.grafana.ok));
+
+    const cards = j.ip_cards || [];
+    el('cards_meta').textContent = cards.length + " devices";
+    const wrap = el('cards');
+    wrap.innerHTML = '';
+    for(const c of cards){
+      const d = document.createElement('div');
+      d.className = 'card';
+      d.innerHTML = `
+        <div class="card-top">
+          <div>
+            <div class="ip">${c.ip || ''}</div>
+            <div class="name">${c.name || ''} ${c.mac ? ('• ' + c.mac) : ''}</div>
+          </div>
+          <div class="pill">${c.shield || 'gray'}</div>
+        </div>
+        <div class="muted" style="margin-top:6px">${c.ai_suggestion || ''}</div>
+      `;
+      wrap.appendChild(d);
+    }
+  }catch(e){}
+
+  // wifi scan -> 2.4 and 5 boxes
+  try{
+    const r = await fetch(API('/api/wifi_scan'), {cache:'no-store'});
+    const j = await r.json();
+    const nets = j.networks || [];
+    const t = j.generated_at || '';
+    const n24 = nets.filter(x => x.band === '2.4').slice(0, 30);
+    const n5  = nets.filter(x => x.band === '5').slice(0, 30);
+
+    el('wifi24_meta').textContent = `${n24.length} seen • ${t}`;
+    el('wifi5_meta').textContent  = `${n5.length} seen • ${t}`;
+
+    const b24 = el('wifi24_box'); b24.innerHTML = '';
+    const b5  = el('wifi5_box');  b5.innerHTML  = '';
+    if(!n24.length) b24.appendChild(lineDiv("No 2.4GHz data yet (STEP 4 will enable Wi-Fi scan)."));
+    if(!n5.length)  b5.appendChild(lineDiv("No 5GHz data yet (STEP 4 will enable Wi-Fi scan)."));
+
+    for(const n of n24){
+      b24.appendChild(lineDiv(`${n.signal_dbm} dBm  ch ${n.channel ?? '?'}  ${n.ssid}  (${n.bssid})`));
+    }
+    for(const n of n5){
+      b5.appendChild(lineDiv(`${n.signal_dbm} dBm  ${n.freq_mhz} MHz  ${n.ssid}  (${n.bssid})`));
+    }
+  }catch(e){}
+
+  // mirror stream box
+  try{
+    const r = await fetch(API('/api/mirror_stream'), {cache:'no-store'});
+    const j = await r.json();
+    const lines = j.lines || [];
+    el('mirror_meta').textContent = (j.generated_at || '');
+    const box = el('mirror_box'); box.innerHTML = '';
+    if(!lines.length) box.appendChild(lineDiv("No mirror stream yet (STEP 5 will enable mirror sensor)."));
+    for(const ln of lines.slice(0, 120)){
+      box.appendChild(lineDiv(ln));
+    }
+  }catch(e){}
+}
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+
+<!-- NETGUARD_FOOTER_AND_ROUTER_UI_V1 -->
+<style id="NETGUARD_FOOTER_PAD_V1">
+  body { padding-bottom: 64px; }
+  .ng-footer{position:fixed;left:0;right:0;bottom:0;height:52px;display:flex;align-items:center;gap:10px;padding:0 14px;z-index:9999;border-top:1px solid rgba(255,255,255,.10);backdrop-filter:blur(10px);background:rgba(5,10,18,.82);}
+  .ng-pill{border-radius:999px;padding:6px 10px;font-size:12px;line-height:1;white-space:nowrap;border:1px solid rgba(255,255,255,.14);}
+  .ng-up{background:rgba(20,160,80,.25);} .ng-down{background:rgba(220,40,60,.30);} .ng-warn{background:rgba(200,150,20,.30);} .ng-muted{opacity:.75;}
+  .ng-flex{display:flex;gap:8px;align-items:center;overflow:auto;}
+  .ng-router-box{margin-top:14px;border-radius:14px;border:1px solid rgba(255,255,255,.10);background:rgba(8,14,24,.55);padding:14px;}
+  .ng-router-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;}
+  .ng-router-card{border-radius:12px;border:1px solid rgba(255,255,255,.10);background:rgba(0,0,0,.35);padding:10px;min-height:72px;}
+  .ng-router-title{font-size:14px;font-weight:700;opacity:.95;}
+  .ng-router-small{font-size:12px;opacity:.80;margin-top:4px;}
+  .ng-pre{font-size:12px;opacity:.85;overflow:auto;max-height:220px;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.35);margin-top:10px;}
+</style>
+
+<div class="ng-router-box" id="ngRouterSentinel">
+  <div class="ng-router-title">Router Sentinel (Live)</div>
+  <div class="ng-router-small ng-muted">Last refresh: <span id="ngRouterLast">never</span></div>
+
+  <div class="ng-router-grid">
+    <div class="ng-router-card">
+      <div class="ng-router-title">Risk</div>
+      <div class="ng-router-small">Level: <b id="ngRiskLevel">?</b> &nbsp; Score: <b id="ngRiskScore">?</b></div>
+      <div class="ng-router-small">Telemetry age: <b id="ngAgeTel">?</b>s &nbsp; Findings age: <b id="ngAgeFind">?</b>s &nbsp; AI age: <b id="ngAgeAi">?</b>s</div>
+    </div>
+    <div class="ng-router-card">
+      <div class="ng-router-title">Counts</div>
+      <div class="ng-router-small">Leases: <b id="ngLeases">?</b> &nbsp; Unknown: <b id="ngUnknown">?</b> &nbsp; Drift: <b id="ngDrift">?</b> &nbsp; Off-LAN: <b id="ngOfflan">?</b></div>
+      <div class="ng-router-small">Wi-Fi assoc: wl0=<b id="ngWl0">?</b> wl1=<b id="ngWl1">?</b> wl2=<b id="ngWl2">?</b></div>
+    </div>
+  </div>
+
+  <details style="margin-top:10px;">
+    <summary class="ng-router-small">Alerts / Recommended actions</summary>
+    <div class="ng-pre" id="ngAlerts">Loading…</div>
+    <div class="ng-pre" id="ngActions">Loading…</div>
+  </details>
+</div>
+
+<div class="ng-footer" id="ngFooter">
+  <div class="ng-pill ng-muted" id="ngFooterVersion">SOC v?</div>
+  <div class="ng-pill ng-muted">Services:</div>
+  <div class="ng-flex" id="ngFooterPills"><span class="ng-pill ng-warn">Loading…</span></div>
+  <div class="ng-pill ng-muted" style="margin-left:auto;">Footer refresh: <span id="ngFooterLast">never</span></div>
+</div>
+
+<script>
+(function(){
+  function fmtAge(x){ if(x===null||x===undefined) return "?"; const n=Math.round(Number(x)); return Number.isFinite(n)?String(n):"?"; }
+  function isoNow(){ return new Date().toISOString(); }
+  function pillClass(active){ if(active==="active") return "ng-up"; if(active==="inactive"||active==="failed") return "ng-down"; return "ng-warn"; }
+
+  async function pollRouter(){
+    try{
+      const r=await fetch("/api/router",{cache:"no-store"});
+      if(!r.ok) throw new Error("router api http "+r.status);
+      const j=await r.json();
+      document.getElementById("ngRouterLast").textContent=isoNow();
+      document.getElementById("ngRiskLevel").textContent=(j.summary&&j.summary.risk_level)||"?";
+      document.getElementById("ngRiskScore").textContent=(j.summary&&j.summary.risk)??"?";
+      const st=(j.summary&&j.summary.stale)||{};
+      document.getElementById("ngAgeTel").textContent=fmtAge(st.telemetry_age_s);
+      document.getElementById("ngAgeFind").textContent=fmtAge(st.findings_age_s);
+      document.getElementById("ngAgeAi").textContent=fmtAge(st.ai_age_s);
+
+      const summ=(j.summary&&j.summary.summary)||{};
+      document.getElementById("ngLeases").textContent=summ.dhcp_leases??"?";
+      document.getElementById("ngUnknown").textContent=summ.unknown_count??"?";
+      document.getElementById("ngDrift").textContent=summ.drift_count??"?";
+      document.getElementById("ngOfflan").textContent=summ.off_lan_count??"?";
+      const wifi=summ.wifi_assoc||{};
+      document.getElementById("ngWl0").textContent=(wifi.wl0??"?");
+      document.getElementById("ngWl1").textContent=(wifi.wl1??"?");
+      document.getElementById("ngWl2").textContent=(wifi.wl2??"?");
+
+      const alerts=(j.summary&&j.summary.alerts)||[];
+      document.getElementById("ngAlerts").textContent=JSON.stringify(alerts,null,2);
+      const ai=(j.router&&j.router.ai)||{};
+      const actions=ai.recommended_actions||[];
+      document.getElementById("ngActions").textContent=JSON.stringify(actions,null,2);
+
+      const v=(j.soc_version||"").trim();
+      if(v) document.getElementById("ngFooterVersion").textContent="SOC v"+v;
+    }catch(e){
+      document.getElementById("ngRouterLast").textContent="ERROR";
+      document.getElementById("ngAlerts").textContent=String(e);
+    }
+  }
+
+  async function pollServices(){
+    try{
+      const r=await fetch("/api/services",{cache:"no-store"});
+      if(!r.ok) throw new Error("services api http "+r.status);
+      const j=await r.json();
+      document.getElementById("ngFooterLast").textContent=isoNow();
+      const v=(j.soc_version||"").trim();
+      if(v) document.getElementById("ngFooterVersion").textContent="SOC v"+v;
+
+      const host=document.getElementById("ngFooterPills");
+      host.innerHTML="";
+      const units=j.units||[];
+      for(const u of units){
+        const span=document.createElement("span");
+        span.className="ng-pill "+pillClass(u.active);
+        span.title=(u.desc?u.desc+" ":"")+(u.sub?("("+u.sub+")"):"");
+        span.textContent=u.unit.replace(".service","").replace(".timer","")+":"+ (u.active||"unknown");
+        host.appendChild(span);
+      }
+      if(units.length===0){
+        const span=document.createElement("span");
+        span.className="ng-pill ng-warn";
+        span.textContent="No units configured";
+        host.appendChild(span);
+      }
+    }catch(e){
+      document.getElementById("ngFooterLast").textContent="ERROR";
+      const host=document.getElementById("ngFooterPills");
+      host.innerHTML="";
+      const span=document.createElement("span");
+      span.className="ng-pill ng-down";
+      span.textContent="services ERROR";
+      span.title=String(e);
+      host.appendChild(span);
+    }
+  }
+
+  pollRouter(); pollServices();
+  setInterval(pollRouter, 5000);
+  setInterval(pollServices, 4000);
+})();
+</script>
+
+
+
+<!-- NETGUARD_STICKY_FOOTER_PILLS_V1 -->
+<!-- patched v2: self-healing footer renderer -->
+<style>
+  .ng-sticky-footer-row{display:flex;justify-content:center;align-items:center;gap:10px;flex-wrap:wrap}
+  .ng-svc-pill{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;font-size:12px;letter-spacing:.2px;
+               padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.18);
+               background:rgba(0,0,0,.35);backdrop-filter:blur(6px);user-select:none}
+  .ng-svc-pill.up{outline:1px solid rgba(0,255,120,.20)}
+  .ng-svc-pill.down{outline:1px solid rgba(255,70,70,.25)}
+  .ng-svc-pill .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;vertical-align:middle}
+  .ng-svc-pill.up .dot{background:rgba(0,255,120,.85)}
+  .ng-svc-pill.down .dot{background:rgba(255,70,70,.9)}
+</style>
+<script>
+(() => {
+  function toArray(json){
+    if (Array.isArray(json)) return json;
+    if (json && Array.isArray(json.services)) return json.services;
+    if (json && Array.isArray(json.data)) return json.data;
+    return [];
+  }
+  function isUp(s){
+    if (s && typeof s.ok === 'boolean') return s.ok;
+    if (s && typeof s.up === 'boolean') return s.up;
+    const st = String((s && (s.status || s.state)) || '').toLowerCase();
+    return ['ok','up','healthy','running','pass','active'].includes(st);
+  }
+  function label(s){
+    const name = (s && (s.display || s.name || s.service || s.id || s.title)) || 'service';
+    const st = (s && (s.status || s.state)) ? String(s.status || s.state) : (isUp(s) ? 'UP' : 'DOWN');
+    return `${name}: ${st}`;
+  }
+
+  function ensureFooterRow(){
+    let footer = document.querySelector('.sticky-footer') || document.querySelector('#stickyFooter') || document.querySelector('footer');
+    if (!footer){
+      footer = document.createElement('div');
+      footer.className = 'sticky-footer';
+      footer.style.position = 'fixed';
+      footer.style.left = '0';
+      footer.style.right = '0';
+      footer.style.bottom = '0';
+      footer.style.zIndex = '9999';
+      footer.style.padding = '10px 12px';
+      footer.style.background = 'rgba(0,0,0,.55)';
+      document.body.appendChild(footer);
+    }
+
+    let row = document.getElementById('ngStickyFooterRow');
+    if (!row || !footer.contains(row)){
+      // Something overwrote the footer; rebuild it.
+      footer.innerHTML = '';
+      row = document.createElement('div');
+      row.id = 'ngStickyFooterRow';
+      row.className = 'ng-sticky-footer-row';
+      footer.appendChild(row);
+    }
+    return row;
+  }
+
+  async function tick(){
+    const row = ensureFooterRow();
+    try{
+      const r = await fetch('/api/services', {cache:'no-store'});
+      const j = await r.json();
+      const services = toArray(j);
+
+      row.innerHTML = '';
+      for (const svc of services){
+        const pill = document.createElement('span');
+        const up = isUp(svc);
+        pill.className = 'ng-svc-pill ' + (up ? 'up' : 'down');
+
+        const dot = document.createElement('span');
+        dot.className = 'dot';
+        pill.appendChild(dot);
+
+        const text = document.createElement('span');
+        text.textContent = label(svc);
+        pill.appendChild(text);
+
+        row.appendChild(pill);
+      }
+
+      if (services.length === 0){
+        row.innerHTML = '<span class="ng-svc-pill down"><span class="dot"></span><span>No services returned</span></span>';
+      }
+    } catch(e){
+      row.innerHTML = '<span class="ng-svc-pill down"><span class="dot"></span><span>Services: ERROR</span></span>';
+    }
+  }
+
+  tick();
+  setInterval(tick, 2000);
+})();
+</script>
+
+<!-- NETGUARD_ALERTS_PANEL_V1 -->
+<style>
+  /* Floating Alerts button */
+  #ngAlertsBtn{
+    position:fixed; right:16px; bottom:64px; z-index:99999;
+    display:flex; align-items:center; gap:10px;
+    font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;
+    font-size:12px; letter-spacing:.3px;
+    padding:10px 12px; border-radius:999px;
+    border:1px solid rgba(255,255,255,.18);
+    background:rgba(0,0,0,.45); backdrop-filter:blur(8px);
+    cursor:pointer; user-select:none;
+  }
+  #ngAlertsBadge{
+    min-width:22px; height:22px; border-radius:999px;
+    display:inline-flex; align-items:center; justify-content:center;
+    font-weight:700;
+    border:1px solid rgba(255,255,255,.18);
+    background:rgba(255,70,70,.20);
+  }
+
+  /* Modal overlay */
+  #ngAlertsModal.ng-hidden{display:none}
+  #ngAlertsModal{
+    position:fixed; inset:0; z-index:99998;
+    background:rgba(0,0,0,.62); backdrop-filter:blur(2px);
+    display:flex; align-items:center; justify-content:center;
+    padding:18px;
+  }
+  .ng-alerts-card{
+    width:min(980px, 96vw);
+    max-height:min(86vh, 900px);
+    overflow:hidden;
+    border-radius:16px;
+    border:1px solid rgba(255,255,255,.14);
+    background:rgba(10,10,12,.86);
+    box-shadow:0 20px 60px rgba(0,0,0,.55);
+    display:flex; flex-direction:column;
+  }
+  .ng-alerts-top{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:14px 16px;
+    border-bottom:1px solid rgba(255,255,255,.10);
+  }
+  .ng-alerts-top h3{
+    margin:0; font-size:14px; letter-spacing:.4px;
+    font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;
+  }
+  .ng-alerts-top .ng-sub{
+    opacity:.75; font-size:12px; margin-left:10px;
+  }
+  .ng-alerts-close{
+    cursor:pointer; border-radius:10px;
+    padding:8px 10px;
+    border:1px solid rgba(255,255,255,.14);
+    background:rgba(0,0,0,.35);
+    color:#fff;
+  }
+  .ng-alerts-body{
+    overflow:auto;
+    padding:12px 12px 14px;
+  }
+
+  .ng-alert{
+    border:1px solid rgba(255,255,255,.10);
+    border-radius:14px;
+    padding:12px 12px 10px;
+    margin:10px 0;
+    background:rgba(0,0,0,.22);
+  }
+  .ng-alert-head{
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+  }
+  .ng-alert-left{display:flex; align-items:center; gap:10px; min-width:0}
+  .ng-pill{
+    font-size:11px; padding:4px 8px; border-radius:999px;
+    border:1px solid rgba(255,255,255,.14);
+    background:rgba(255,255,255,.06);
+    text-transform:uppercase; letter-spacing:.35px;
+    white-space:nowrap;
+  }
+  .ng-pill.warning{outline:1px solid rgba(255,200,50,.22)}
+  .ng-pill.error,.ng-pill.critical{outline:1px solid rgba(255,70,70,.28)}
+  .ng-pill.suggestion{outline:1px solid rgba(80,170,255,.22)}
+
+  .ng-alert-title{
+    font-size:13px; font-weight:650;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .ng-alert-meta{
+    opacity:.7; font-size:12px; white-space:nowrap;
+  }
+
+  .ng-alert-actions{
+    display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end;
+  }
+  .ng-btn{
+    cursor:pointer;
+    font-size:12px;
+    padding:6px 10px;
+    border-radius:10px;
+    border:1px solid rgba(255,255,255,.14);
+    background:rgba(0,0,0,.32);
+    color:#fff;
+  }
+  .ng-btn.danger{outline:1px solid rgba(255,70,70,.28)}
+  .ng-btn.good{outline:1px solid rgba(0,255,120,.20)}
+  .ng-btn.info{outline:1px solid rgba(80,170,255,.22)}
+
+  .ng-alert-detail{
+    margin-top:10px;
+    padding-top:10px;
+    border-top:1px dashed rgba(255,255,255,.12);
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:12px;
+    white-space:pre-wrap;
+    opacity:.92;
+  }
+</style>
+
+<button id="ngAlertsBtn" title="Open Alerts">
+  ALERTS
+  <span id="ngAlertsBadge">0</span>
+</button>
+
+<div id="ngAlertsModal" class="ng-hidden" role="dialog" aria-modal="true" aria-label="Alerts">
+  <div class="ng-alerts-card">
+    <div class="ng-alerts-top">
+      <div style="display:flex; align-items:baseline; gap:10px;">
+        <h3>NetGuard Alerts</h3>
+        <div class="ng-sub" id="ngAlertsSub">Loading…</div>
+      </div>
+      <button class="ng-alerts-close" id="ngAlertsClose">Close</button>
+    </div>
+    <div class="ng-alerts-body" id="ngAlertsList"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const btn = document.getElementById("ngAlertsBtn");
+  const badge = document.getElementById("ngAlertsBadge");
+  const modal = document.getElementById("ngAlertsModal");
+  const closeBtn = document.getElementById("ngAlertsClose");
+  const list = document.getElementById("ngAlertsList");
+  const sub = document.getElementById("ngAlertsSub");
+
+  let lastPayload = null;
+
+  function esc(s){ return (s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+  async function apiGetAlerts(){
+    const r = await fetch("/api/alerts", {cache:"no-store"});
+    if(!r.ok) throw new Error("alerts http " + r.status);
+    return await r.json();
+  }
+  async function apiPost(path){
+    const r = await fetch(path, {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"});
+    if(!r.ok) throw new Error("post http " + r.status);
+    return await r.json();
+  }
+
+  function render(payload){
+    lastPayload = payload;
+    const alerts = (payload && payload.alerts) ? payload.alerts : [];
+    const openCount = (payload && typeof payload.open_count === "number")
+      ? payload.open_count
+      : alerts.filter(a => (a.status||"open")==="open").length;
+
+    badge.textContent = String(openCount);
+    sub.textContent = `${openCount} open • ${alerts.length} total`;
+
+    list.innerHTML = alerts.map(a => {
+      const lvl = (a.level||"warning").toLowerCase();
+      const status = (a.status||"open").toLowerCase();
+      const requiresAdmin = !!a.requires_admin;
+      const id = a.id;
+
+      const meta = `${esc(a.source||"")}${a.timestamp ? " • "+esc(a.timestamp) : ""}${status!=="open" ? " • "+esc(status) : ""}`;
+      const detail = esc(a.detail||"");
+
+      const aiDetail = a.ai_detail ? esc(JSON.stringify(a.ai_detail, null, 2)) : "";
+
+      const adminBtn = (requiresAdmin && status==="open")
+        ? `<button class="ng-btn good" data-act="approve" data-id="${id}">Admin Approval</button>`
+        : "";
+
+      return `
+        <div class="ng-alert" data-id="${id}">
+          <div class="ng-alert-head">
+            <div class="ng-alert-left" style="min-width:0;">
+              <span class="ng-pill ${lvl}">${esc(lvl)}</span>
+              <div style="min-width:0;">
+                <div class="ng-alert-title">${esc(a.title||"(untitled alert)")}</div>
+                <div class="ng-alert-meta">${meta}</div>
+              </div>
+            </div>
+
+            <div class="ng-alert-actions">
+              <button class="ng-btn info" data-act="ai" data-id="${id}">Ask AI</button>
+              <button class="ng-btn" data-act="reset" data-id="${id}">Reset</button>
+              ${adminBtn}
+              <button class="ng-btn" data-act="dismiss" data-id="${id}">Dismiss</button>
+              <button class="ng-btn danger" data-act="delete" data-id="${id}">Delete</button>
+            </div>
+          </div>
+
+          <div class="ng-alert-detail">
+DETAIL:
+${detail}
+
+${a.ai_detail ? "AI_DETAIL:\n"+aiDetail : "(No AI detail yet — click “Ask AI”.)"}
+          </div>
+        </div>
+      `;
+    }).join("");
+
+    if(alerts.length === 0){
+      list.innerHTML = `<div style="opacity:.75; font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif; padding:12px;">
+        No alerts right now. 🎉
+      </div>`;
+    }
+  }
+
+  async function refresh(){
+    try{
+      const payload = await apiGetAlerts();
+      render(payload);
+    }catch(e){
+      sub.textContent = "Alerts API error — check /api/alerts";
+      // keep badge unchanged if API down
+      console.warn(e);
+    }
+  }
+
+  // Click handlers
+  btn.addEventListener("click", async () => {
+    modal.classList.remove("ng-hidden");
+    await refresh();
+  });
+  closeBtn.addEventListener("click", () => modal.classList.add("ng-hidden"));
+  modal.addEventListener("click", (e) => { if(e.target === modal) modal.classList.add("ng-hidden"); });
+
+  list.addEventListener("click", async (e) => {
+    const b = e.target.closest("button[data-act]");
+    if(!b) return;
+    const act = b.getAttribute("data-act");
+    const id = b.getAttribute("data-id");
+    try{
+      if(act === "dismiss") await apiPost(`/api/alerts/${id}/dismiss`);
+      if(act === "delete")  await apiPost(`/api/alerts/${id}/delete`);
+      if(act === "reset")   await apiPost(`/api/alerts/${id}/reset`);
+      if(act === "approve") await apiPost(`/api/alerts/${id}/approve`);
+      if(act === "ai")      await apiPost(`/api/alerts/${id}/ai_expand`);
+      await refresh();
+    }catch(err){
+      console.error(err);
+      sub.textContent = "Action failed — check SOC logs";
+    }
+  });
+
+  // Background badge refresh (so you see count change without opening modal)
+  setInterval(async () => {
+    try{
+      const payload = await apiGetAlerts();
+      const openCount = (payload && typeof payload.open_count === "number")
+        ? payload.open_count
+        : (payload.alerts||[]).filter(a => (a.status||"open")==="open").length;
+      badge.textContent = String(openCount);
+    }catch(_){}
+  }, 2500);
+
+  // initial badge load
+  refresh();
+})();
+</script>
+
+
+<!-- NETGUARD_ALERTS_UI_WIREUP_V2 -->
+<style>
+  /* Alerts pill in sticky footer (matches service pills) */
+  .ng-alert-pill{cursor:pointer}
+  .ng-alert-pill .count{
+    margin-left:8px; padding:2px 7px; border-radius:999px;
+    border:1px solid rgba(255,255,255,.18);
+    background:rgba(0,0,0,.35);
+    font-size:11px;
+  }
+  .ng-alert-pill.hot{outline:1px solid rgba(255,70,70,.30)}
+  .ng-alert-pill.warm{outline:1px solid rgba(255,200,70,.25)}
+  /* Modal */
+  #ngAlertsModal{position:fixed; inset:0; z-index:100000; display:none}
+  #ngAlertsModal .backdrop{position:absolute; inset:0; background:rgba(0,0,0,.55)}
+  #ngAlertsModal .panel{
+    position:absolute; left:50%; top:10%;
+    transform:translateX(-50%);
+    width:min(980px, 94vw); max-height:80vh; overflow:auto;
+    border:1px solid rgba(255,255,255,.14);
+    border-radius:16px;
+    background:rgba(10,10,12,.92);
+    backdrop-filter:blur(10px);
+    box-shadow:0 12px 60px rgba(0,0,0,.55);
+    padding:14px;
+    font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;
+    color:rgba(255,255,255,.92);
+  }
+  #ngAlertsModal .topbar{display:flex; align-items:center; justify-content:space-between; gap:10px}
+  #ngAlertsModal .title{font-size:14px; letter-spacing:.3px}
+  #ngAlertsModal .btn{
+    cursor:pointer; user-select:none;
+    padding:7px 10px; border-radius:10px;
+    border:1px solid rgba(255,255,255,.14);
+    background:rgba(255,255,255,.06);
+    font-size:12px;
+  }
+  #ngAlertsModal .btn:hover{background:rgba(255,255,255,.10)}
+  #ngAlertsModal .list{margin-top:12px; display:flex; flex-direction:column; gap:10px}
+  .ngAlertRow{
+    border:1px solid rgba(255,255,255,.10);
+    border-radius:14px;
+    padding:10px;
+    background:rgba(255,255,255,.03);
+  }
+  .ngAlertHead{display:flex; align-items:flex-start; justify-content:space-between; gap:10px}
+  .ngAlertMeta{display:flex; flex-direction:column; gap:4px}
+  .ngAlertTitle{font-size:13px}
+  .ngAlertSub{font-size:11px; opacity:.85}
+  .ngAlertBadge{display:inline-flex; align-items:center; gap:8px; font-size:11px; opacity:.95}
+  .ngDot{width:9px;height:9px;border-radius:50%}
+  .ngDot.info{background:rgba(120,180,255,.95)}
+  .ngDot.suggestion{background:rgba(150,255,160,.95)}
+  .ngDot.warning{background:rgba(255,200,80,.95)}
+  .ngDot.error,.ngDot.critical{background:rgba(255,90,90,.95)}
+  .ngAlertActions{display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end}
+  .ngAlertBody{margin-top:8px; font-size:12px; opacity:.92; line-height:1.35}
+  .ngAIDetail{
+    margin-top:8px; padding:10px; border-radius:12px;
+    border:1px solid rgba(255,255,255,.10);
+    background:rgba(0,0,0,.25);
+    white-space:pre-wrap; font-size:12px;
+  }
+  .ngStatusPill{
+    display:inline-flex; align-items:center;
+    padding:2px 8px; border-radius:999px;
+    border:1px solid rgba(255,255,255,.14);
+    background:rgba(0,0,0,.25);
+  }
+</style>
+
+<div id="ngAlertsModal">
+  <div class="backdrop"></div>
+  <div class="panel" role="dialog" aria-modal="true">
+    <div class="topbar">
+      <div class="title">🚨 Alerts & AI Findings</div>
+      <div style="display:flex; gap:10px; align-items:center;">
+        <div id="ngAlertsSummary" style="font-size:12px; opacity:.85;"></div>
+        <div class="btn" id="ngAlertsClose">Close</div>
+      </div>
+    </div>
+    <div class="list" id="ngAlertsList"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const API_ALERTS = "/api/alerts";
+
+  function el(tag, cls){ const e=document.createElement(tag); if(cls) e.className=cls; return e; }
+
+  function ensureFooterAlertsPill(){
+    const footerRow = document.querySelector('.ng-sticky-footer-row');
+    if(!footerRow) return null;
+
+    let pill = document.getElementById('ngAlertsPill');
+    if(pill) return pill;
+
+    pill = el('div','ng-svc-pill ng-alert-pill');
+    pill.id = "ngAlertsPill";
+    pill.title = "Open Alerts panel";
+    pill.innerHTML = '<span class="dot"></span><span>ALERTS</span><span class="count" id="ngAlertsCount">0</span>';
+    footerRow.appendChild(pill);
+    pill.addEventListener('click', () => openAlerts());
+    return pill;
+  }
+
+  function showModal(show){
+    const m = document.getElementById('ngAlertsModal');
+    if(!m) return;
+    m.style.display = show ? 'block' : 'none';
+  }
+
+  function openAlerts(){
+    showModal(true);
+    refreshAlerts(true);
+  }
+
+  function closeAlerts(){
+    showModal(false);
+  }
+
+  function statusSortKey(s){
+    s=(s||"open").toLowerCase();
+    if(s==="open") return 0;
+    if(s==="approved") return 1;
+    if(s==="dismissed") return 2;
+    if(s==="deleted") return 3;
+    return 9;
+  }
+
+  async function postJson(url, body){
+    const r = await fetch(url, {
+      method:"POST",
+      headers: {"Content-Type":"application/json"},
+      body: body ? JSON.stringify(body) : "{}",
+      cache:"no-store"
+    });
+    const t = await r.text();
+    try{ return JSON.parse(t); } catch(e){ return {ok:false, error:"non-json", raw:t, status:r.status}; }
+  }
+
+  function dotClass(level){
+    level=(level||"info").toLowerCase();
+    if(level==="critical") return "critical";
+    if(level==="error") return "error";
+    if(level==="warning") return "warning";
+    if(level==="suggestion") return "suggestion";
+    return "info";
+  }
+
+  async function askAI(a){
+    const id = a.id;
+    const out = await postJson(`/api/alerts/${id}/ask_ai`, {
+      title: a.title, detail: a.detail, level: a.level, source: a.source
+    });
+    return out;
+  }
+
+  async function refreshAlerts(forceRender){
+    const pill = ensureFooterAlertsPill();
+    let data = null;
+    try{
+      const r = await fetch(API_ALERTS, {cache:"no-store"});
+      const t = await r.text();
+      data = JSON.parse(t);
+    }catch(e){
+      // if API fails, still show something
+      if(pill){
+        pill.classList.remove("hot","warm");
+        const c = document.getElementById('ngAlertsCount');
+        if(c) c.textContent = "?";
+      }
+      return;
+    }
+
+    const alerts = (data.alerts || []).slice().sort((a,b)=>statusSortKey(a.status)-statusSortKey(b.status));
+    const openCount = Number(data.open_count || 0);
+
+    // Update pill count + severity styling
+    if(pill){
+      const c = document.getElementById('ngAlertsCount');
+      if(c) c.textContent = String(openCount);
+      pill.classList.remove("hot","warm");
+      if(openCount >= 3) pill.classList.add("hot");
+      else if(openCount >= 1) pill.classList.add("warm");
+    }
+
+    // Update summary
+    const summary = document.getElementById('ngAlertsSummary');
+    if(summary){
+      summary.textContent = `${openCount} actionable open • ${alerts.length} total`;
+    }
+
+    // Render modal list if open (or forced)
+    const modal = document.getElementById('ngAlertsModal');
+    const isOpen = modal && modal.style.display !== "none";
+    if(!isOpen && !forceRender) return;
+
+    const list = document.getElementById('ngAlertsList');
+    if(!list) return;
+    list.innerHTML = "";
+
+    if(alerts.length === 0){
+      const empty = el('div','ngAlertRow');
+      empty.textContent = "No alerts right now.";
+      list.appendChild(empty);
+      return;
+    }
+
+    for(const a of alerts){
+      const row = el('div','ngAlertRow');
+
+      const head = el('div','ngAlertHead');
+      const meta = el('div','ngAlertMeta');
+
+      const title = el('div','ngAlertTitle');
+      title.textContent = a.title || a.detail || "(untitled)";
+
+      const sub = el('div','ngAlertSub');
+      const lvl = (a.level||"info").toUpperCase();
+      const src = (a.source||"").toString();
+      const ts  = (a.timestamp||"").toString();
+      const st  = (a.status||"open").toString();
+      const needs = a.requires_admin ? " • ADMIN" : "";
+      sub.innerHTML = `<span class="ngAlertBadge"><span class="ngDot ${dotClass(a.level)}"></span>${lvl}</span> • ${src}${needs} • <span class="ngStatusPill">${st}</span> • ${ts}`;
+
+      meta.appendChild(title);
+      meta.appendChild(sub);
+
+      const actions = el('div','ngAlertActions');
+
+      // Admin approve (only if requires_admin and still open)
+      if(a.requires_admin && (a.status||"open")==="open"){
+        const b = el('div','btn'); b.textContent="Admin approval";
+        b.addEventListener('click', async ()=>{
+          await postJson(`/api/alerts/${a.id}/approve`, {title:a.title,detail:a.detail,level:a.level,source:a.source});
+          refreshAlerts(true);
+        });
+        actions.appendChild(b);
+      }
+
+      // Ask AI
+      const aiBtn = el('div','btn'); aiBtn.textContent="Ask AI";
+      aiBtn.addEventListener('click', async ()=>{
+        aiBtn.textContent="Asking…";
+        const out = await askAI(a);
+        aiBtn.textContent="Ask AI";
+        if(out && out.ai_detail){
+          refreshAlerts(true);
+        }
+      });
+      actions.appendChild(aiBtn);
+
+      // Dismiss
+      const dis = el('div','btn'); dis.textContent="Dismiss";
+      dis.addEventListener('click', async ()=>{
+        await postJson(`/api/alerts/${a.id}/dismiss`, {title:a.title,detail:a.detail,level:a.level,source:a.source});
+        refreshAlerts(true);
+      });
+      actions.appendChild(dis);
+
+      // Reset
+      const rst = el('div','btn'); rst.textContent="Reset";
+      rst.addEventListener('click', async ()=>{
+        await postJson(`/api/alerts/${a.id}/reset`, {title:a.title,detail:a.detail,level:a.level,source:a.source});
+        refreshAlerts(true);
+      });
+      actions.appendChild(rst);
+
+      // Delete
+      const del = el('div','btn'); del.textContent="Delete";
+      del.addEventListener('click', async ()=>{
+        await postJson(`/api/alerts/${a.id}/delete`, {title:a.title,detail:a.detail,level:a.level,source:a.source});
+        refreshAlerts(true);
+      });
+      actions.appendChild(del);
+
+      head.appendChild(meta);
+      head.appendChild(actions);
+
+      const body = el('div','ngAlertBody');
+      body.textContent = a.detail || "";
+
+      row.appendChild(head);
+      row.appendChild(body);
+
+      if(a.ai_detail){
+        const ai = el('div','ngAIDetail');
+        ai.textContent = a.ai_detail;
+        row.appendChild(ai);
+      }
+
+      list.appendChild(row);
+    }
+  }
+
+  // Wire modal close
+  document.addEventListener('DOMContentLoaded', ()=>{
+    ensureFooterAlertsPill();
+    const m = document.getElementById('ngAlertsModal');
+    const close = document.getElementById('ngAlertsClose');
+    if(close) close.addEventListener('click', closeAlerts);
+    if(m){
+      const bd = m.querySelector('.backdrop');
+      if(bd) bd.addEventListener('click', closeAlerts);
+      document.addEventListener('keydown', (e)=>{ if(e.key==="Escape") closeAlerts(); });
+    }
+    // initial refresh + periodic updates
+    refreshAlerts(false);
+    setInterval(()=>refreshAlerts(false), 5000);
+  });
+})();
+</script>
+
+</body>
+</html>

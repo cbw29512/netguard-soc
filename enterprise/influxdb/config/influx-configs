@@ -1,0 +1,20 @@
+[default]
+  url = "http://localhost:8086"
+  token = "a4cd19967eab33610a7f98e09267a6e68ad949b1b1f14ef9b4355b95cd1bf831"
+  org = "netguard"
+  active = true
+# 
+# [eu-central]
+#   url = "https://eu-central-1-1.aws.cloud2.influxdata.com"
+#   token = "XXX"
+#   org = ""
+# 
+# [us-central]
+#   url = "https://us-central1-1.gcp.cloud2.influxdata.com"
+#   token = "XXX"
+#   org = ""
+# 
+# [us-west]
+#   url = "https://us-west-2-1.aws.cloud2.influxdata.com"
+#   token = "XXX"
+#   org = ""

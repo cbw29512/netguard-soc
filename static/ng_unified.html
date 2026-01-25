@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>NetGuard SOC v2.0 | Unified Dashboard</title>
+    <style>
+        :root { 
+            --bg: #0a0a0a; 
+            --accent: #00ffff; 
+            --accent2: #ff00ff;
+            --ok: #00ff00; 
+            --warn: #ffff00;
+            --bad: #ff0000; 
+            --card-bg: #1a1a2e;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            background: var(--bg); 
+            color: #f8fafc; 
+            font-family: 'Orbitron', 'Segoe UI', sans-serif; 
+            overflow-x: hidden;
+        }
+        
+        /* Header with AI thoughts */
+        .ai-header { 
+            background: linear-gradient(90deg, var(--accent2) 0%, var(--accent) 100%);
+            padding: 15px; 
+            font-weight: 900; 
+            font-size: 16px;
+            color: #000;
+            text-shadow: 0 0 10px #fff;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.8; } }
+        
+        /* Tab Navigation */
+        .tabs {
+            display: flex;
+            background: #1e293b;
+            border-bottom: 3px solid var(--accent);
+        }
+        .tab {
+            padding: 15px 30px;
+            cursor: pointer;
+            font-weight: 700;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s;
+        }
+        .tab:hover { background: #334155; }
+        .tab.active { 
+            border-bottom-color: var(--accent); 
+            background: #0f172a;
+            color: var(--accent);
+        }
+        
+        /* Tab Content */
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        
+        /* Traffic View (Old) */
+        .traffic-view {
+            display: grid;
+            grid-template-columns: 1fr 450px;
+            gap: 20px;
+            padding: 20px;
+            height: calc(100vh - 150px);
+        }
+        .panel {
+            background: #0f172a;
+            border: 3px solid #334155;
+            border-radius: 8px;
+            padding: 15px;
+            overflow-y: auto;
+        }
+        .panel h3 {
+            font-size: 20px;
+            font-weight: 900;
+            color: var(--accent);
+            margin-bottom: 15px;
+            border-bottom: 2px solid #334155;
+            padding-bottom: 8px;
+        }
+        .ip-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 15px;
+        }
+        .traffic-card {
+            background: #1e293b;
+            border: 3px solid var(--accent);
+            border-radius: 8px;
+            padding: 15px;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        .traffic-card:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 20px var(--accent);
+        }
+        .stream {
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            color: var(--ok);
+            background: #000;
+            padding: 12px;
+            height: 100%;
+            overflow-y: auto;
+            line-height: 1.6;
+        }
+        
+        /* Device View (New) */
+        .device-view {
+            padding: 20px;
+        }
+        .status-bar {
+            display: flex;
+            justify-content: space-around;
+            background: #1e293b;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            border: 2px solid var(--accent);
+        }
+        .status-item {
+            text-align: center;
+        }
+        .status-label {
+            font-size: 12px;
+            color: #94a3b8;
+        }
+        .status-value {
+            font-size: 24px;
+            font-weight: 900;
+            color: var(--accent);
+        }
+        .device-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+        }
+        .device-card {
+            background: var(--card-bg);
+            border: 3px solid var(--accent);
+            border-radius: 10px;
+            padding: 20px;
+            transition: all 0.3s;
+        }
+        .device-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 0 30px rgba(0, 255, 255, 0.6);
+        }
+        .device-card.alert { border-color: var(--bad); animation: alert-pulse 1s infinite; }
+        .device-card.unknown { border-color: var(--warn); }
+        @keyframes alert-pulse {
+            0%, 100% { box-shadow: 0 0 20px rgba(255, 0, 0, 0.5); }
+            50% { box-shadow: 0 0 40px rgba(255, 0, 0, 1); }
+        }
+        .device-hostname {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--accent);
+            margin-bottom: 10px;
+        }
+        .device-info {
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.8;
+        }
+        .device-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 5px;
+            font-size: 12px;
+            font-weight: 700;
+            margin-top: 10px;
+        }
+        .badge-known { background: var(--ok); color: #000; }
+        .badge-unknown { background: var(--warn); color: #000; }
+        .badge-alert { background: var(--bad); color: #fff; }
+        
+        /* Footer */
+        .footer {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            background: #1e293b;
+            padding: 10px;
+            border-top: 3px solid var(--accent);
+            text-align: center;
+            font-size: 12px;
+            color: var(--accent);
+        }
+    </style>
+</head>
+<body>
+    <div class="ai-header" id="ai-thought">>>> NETGUARD SOC v2.0 UNIFIED - INITIALIZING...</div>
+    
+    <div class="tabs">
+        <div class="tab active" onclick="switchTab('traffic')">📊 Traffic Monitor (InfluxDB)</div>
+        <div class="tab" onclick="switchTab('devices')">🛡️ Device Security (Live)</div>
+        <div class="tab" onclick="switchTab('alerts')">🚨 Active Alerts</div>
+    </div>
+    
+    <!-- Traffic View (OLD) -->
+    <div id="tab-traffic" class="tab-content active">
+        <div class="traffic-view">
+            <div class="panel">
+                <h3>Tactical Grid - Network Traffic</h3>
+                <div class="ip-grid" id="traffic-grid"></div>
+            </div>
+            <div>
+                <div class="panel" style="height: 40%; margin-bottom: 20px;">
+                    <h3>Mirror Flow Log</h3>
+                    <div class="stream" id="stream-mirror">LISTENING...</div>
+                </div>
+                <div class="panel" style="height: 55%;">
+                    <h3>Wi-Fi Intelligence (2.4/5/6G)</h3>
+                    <div class="stream" id="stream-wifi">SCANNING...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Device View (NEW) -->
+    <div id="tab-devices" class="tab-content">
+        <div class="device-view">
+            <div class="status-bar">
+                <div class="status-item">
+                    <div class="status-label">DEVICES</div>
+                    <div class="status-value" id="stat-devices">0</div>
+                </div>
+                <div class="status-item">
+                    <div class="status-label">ALERTS</div>
+                    <div class="status-value" style="color: var(--bad);" id="stat-alerts">0</div>
+                </div>
+                <div class="status-item">
+                    <div class="status-label">HEALTH</div>
+                    <div class="status-value" id="stat-health">OK</div>
+                </div>
+                <div class="status-item">
+                    <div class="status-label">VERSION</div>
+                    <div class="status-value" style="font-size: 16px;" id="stat-version">v2.0</div>
+                </div>
+            </div>
+            <div class="device-grid" id="device-grid"></div>
+        </div>
+    </div>
+    
+    <!-- Alerts View (NEW) -->
+    <div id="tab-alerts" class="tab-content">
+        <div class="device-view">
+            <div class="panel">
+                <h3>Active Security Alerts</h3>
+                <div id="alerts-list" style="padding: 20px;"></div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="footer">
+        NetGuard SOC v2.0 Unified | Traffic + Security | Real-Time Monitoring
+    </div>
+    
+    <script>
+        let currentTab = 'traffic';
+        
+        function switchTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            
+            event.target.classList.add('active');
+            document.getElementById('tab-' + tab).classList.add('active');
+            currentTab = tab;
+        }
+        
+        async function refreshTraffic() {
+            try {
+                // OLD: Traffic data from InfluxDB
+                const s = await (await fetch('/api/state')).json();
+                if (s.ip_cards && s.ip_cards.length > 0) {
+                    document.getElementById('traffic-grid').innerHTML = s.ip_cards.map(c => `
+                        <div class="traffic-card">
+                            <div style="font-size:20px; font-weight:900;">Node-${c.ip.split('.').pop()}</div>
+                            <div style="color:var(--accent); font-weight:bold; margin:5px 0;">${c.ip}</div>
+                            <div style="color:var(--bad); font-weight:900; font-size:14px;">▲ UP: ${(c.up/1024).toFixed(1)}K</div>
+                            <div style="color:var(--ok); font-weight:900; font-size:14px;">▼ DN: ${(c.down/1024).toFixed(1)}K</div>
+                        </div>`).join('');
+                    
+                    document.getElementById('stream-mirror').innerText = s.ip_cards.slice(0,10)
+                        .map(c => `[FLOW] ${c.ip.padEnd(15)} | ${((c.up+c.down)/1024).toFixed(1)}K total`)
+                        .join('\n');
+                }
+                
+                // OLD: WiFi scan
+                const w = await (await fetch('/api/wifi_scan')).json();
+                if (w.networks) {
+                    document.getElementById('stream-wifi').innerText = w.networks
+                        .map(n => `[${n.signal_dbm}dBm] ${n.band}G | CH:${n.channel} | ${n.ssid}`)
+                        .join('\n');
+                }
+            } catch(e) { console.error('Traffic refresh error:', e); }
+        }
+        
+        async function refreshDevices() {
+            try {
+                // NEW: Device security data
+                const d = await (await fetch('/api/devices')).json();
+                const devices = d.devices || [];
+                
+                document.getElementById('device-grid').innerHTML = devices.map(dev => {
+                    const alertClass = dev.alert_count > 0 ? 'alert' : '';
+                    const unknownClass = !dev.known ? 'unknown' : '';
+                    const badgeClass = dev.alert_count > 0 ? 'badge-alert' : dev.known ? 'badge-known' : 'badge-unknown';
+                    const badgeText = dev.alert_count > 0 ? `⚠️ ${dev.alert_count} ALERT` : dev.known ? '✓ KNOWN' : '❓ UNKNOWN';
+                    
+                    return `
+                        <div class="device-card ${alertClass} ${unknownClass}">
+                            <div class="device-hostname">${dev.hostname}</div>
+                            <div class="device-info">
+                                <div>IP: ${dev.ip}</div>
+                                <div>MAC: ${dev.mac}</div>
+                                ${dev.reserved_name ? `<div>Name: ${dev.reserved_name}</div>` : ''}
+                                <div>Status: ${dev.reachable ? '🟢 ONLINE' : '🔴 OFFLINE'}</div>
+                            </div>
+                            <span class="device-badge ${badgeClass}">${badgeText}</span>
+                        </div>
+                    `;
+                }).join('');
+                
+                // Update status bar
+                document.getElementById('stat-devices').innerText = devices.length;
+                
+                // NEW: System status
+                const status = await (await fetch('/api/status')).json();
+                document.getElementById('stat-alerts').innerText = status.active_alerts || 0;
+                document.getElementById('stat-health').innerText = (status.health_status || 'unknown').toUpperCase();
+                document.getElementById('stat-version').innerText = status.version || 'v2.0';
+                
+                // NEW: Findings/alerts
+                const findings = await (await fetch('/api/findings')).json();
+                const alerts = findings.alerts || [];
+                document.getElementById('alerts-list').innerHTML = alerts.length === 0 ? 
+                    '<div style="color: var(--ok); font-size: 20px;">✓ No active alerts</div>' :
+                    alerts.map(a => `
+                        <div style="padding: 15px; margin: 10px 0; background: rgba(255,0,0,0.1); border-left: 4px solid var(--bad); border-radius: 5px;">
+                            <div style="font-weight: 900; color: var(--bad);">🚨 ${a.kind || 'ALERT'}</div>
+                            <div style="color: #94a3b8; margin-top: 5px;">Severity: ${a.severity || 'unknown'}</div>
+                            <div style="color: #94a3b8; margin-top: 5px;">Count: ${a.count || 0}</div>
+                        </div>
+                    `).join('');
+                
+            } catch(e) { console.error('Device refresh error:', e); }
+        }
+        
+        async function refreshAI() {
+            try {
+                const a = await (await fetch('/api/ai_thoughts')).json();
+                if (a.lines && a.lines.length > 0) {
+                    document.getElementById('ai-thought').innerText = ">>> " + a.lines[a.lines.length-1].toUpperCase();
+                }
+            } catch(e) { console.error('AI refresh error:', e); }
+        }
+        
+        async function refreshAll() {
+            await refreshTraffic();
+            await refreshDevices();
+            await refreshAI();
+        }
+        
+        // Refresh every 2 seconds
+        setInterval(refreshAll, 2000);
+        refreshAll();
+    </script>
+</body>
+</html>
