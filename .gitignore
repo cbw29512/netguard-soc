@@ -1,5 +1,35 @@
+# Secrets and environment
+.env
+.env.*
+!.env.example
 enterprise/secrets/
 enterprise/grafana/provisioning/datasources/influxdb.yaml
 *.token
+*.secret
+*.key
+*.pem
+
+# Private network and runtime data
+app/device_map.json
+*device_map*.json
+*inventory*.json
+*telemetry*.json
+*findings*.json
+*wifi_scan*.json
+enterprise/grafana/data/
+**/data/*.db
+**/data/*.sqlite*
+*.db
+*.sqlite*
+
+# Generated code, logs, backups, and archives
+__pycache__/
+*.py[cod]
+*.log
+*.backup*
+*.bak
+*.bak_*
 *.tgz
+*.tar
+*.gz
 tmp/
