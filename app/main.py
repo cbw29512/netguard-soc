@@ -1,149 +1,201 @@
-from fastapi import FastAPI, Response
-from fastapi.staticfiles import StaticFiles
+import csv
+import io
+import logging
+import os
+import pathlib
+import secrets
+import sys
+from typing import Optional
+
+import requests
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, status
 from fastapi.responses import HTMLResponse
-import json, pathlib, requests, sys
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-# Add lib path for new functionality
-sys.path.insert(0, '/opt/netguard/sensors/lib')
-from safe_json import read_json_safe
+sys.path.insert(0, "/opt/netguard/sensors/lib")
+from safe_json import read_json_safe  # noqa: E402
 
-app = FastAPI()
+logger = logging.getLogger("netguard.api")
+VERSION = "v2.1.0-secure"
+security = HTTPBasic(auto_error=False)
+
+
+def _allowed_hosts() -> list[str]:
+    raw_hosts = os.getenv("NETGUARD_ALLOWED_HOSTS", "localhost,127.0.0.1,[::1]")
+    return [host.strip() for host in raw_hosts.split(",") if host.strip()]
+
+
+def require_auth(
+    credentials: Optional[HTTPBasicCredentials] = Depends(security),
+) -> str:
+    """Require credentials supplied through deployment-only environment variables."""
+    expected_username = os.getenv("NETGUARD_USERNAME")
+    expected_password = os.getenv("NETGUARD_PASSWORD")
+    if not expected_username or not expected_password:
+        logger.critical("NETGUARD_USERNAME and NETGUARD_PASSWORD are not configured")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="NetGuard authentication is not configured.",
+        )
+
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required.",
+            headers={"WWW-Authenticate": "Basic realm=netguard"},
+        )
+
+    username_ok = secrets.compare_digest(
+        credentials.username.encode("utf-8"),
+        expected_username.encode("utf-8"),
+    )
+    password_ok = secrets.compare_digest(
+        credentials.password.encode("utf-8"),
+        expected_password.encode("utf-8"),
+    )
+    if not (username_ok and password_ok):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials.",
+            headers={"WWW-Authenticate": "Basic realm=netguard"},
+        )
+    return credentials.username
+
+
+app = FastAPI(title="NetGuard SOC", version=VERSION, docs_url=None, redoc_url=None)
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts())
 app.mount("/static", StaticFiles(directory="/opt/netguard/static"), name="static")
+protected = APIRouter(dependencies=[Depends(require_auth)])
 
-VERSION = "v2.0.0-unified"  # Version tracking
 
-# ============================================================================
-# OLD ENDPOINTS (Preserved - InfluxDB Traffic)
-# ============================================================================
+@app.middleware("http")
+async def prevent_sensitive_caching(request, call_next):
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path == "/v2" or request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+    return response
 
-@app.get("/api/state")
+
+@protected.get("/api/state")
 def get_state():
-    """OLD: Traffic data from InfluxDB (UP/DOWN bytes per IP)"""
     try:
         token = pathlib.Path("/opt/netguard/secrets/influx_admin.token").read_text().strip()
-        flux = 'from(bucket: "network_stats") |> range(start: -10m) |> filter(fn: (r) => r._measurement == "traffic")'
-        r = requests.post("http://127.0.0.1:8086/api/v2/query?org=netguard",
-            headers={"Authorization": f"Token {token}", "Accept": "application/csv", "Content-type": "application/vnd.flux"},
-            data=flux, timeout=5)
-        
-        data_map = {}
-        for line in r.text.splitlines():
-            parts = [p.strip() for p in line.split(',')]
-            if len(parts) >= 7 and parts[1] == "_result":
-                ip, field = parts[6], parts[5]
-                val = int(float(parts[4])) if parts[4] else 0
-                if ip not in data_map: data_map[ip] = {"up": 0, "down": 0}
-                if field in ['up', 'down']: data_map[ip][field] += val
+        flux = (
+            'from(bucket: "network_stats") |> range(start: -10m) '
+            '|> filter(fn: (r) => r._measurement == "traffic")'
+        )
+        response = requests.post(
+            "http://127.0.0.1:8086/api/v2/query?org=netguard",
+            headers={
+                "Authorization": f"Token {token}",
+                "Accept": "application/csv",
+                "Content-Type": "application/vnd.flux",
+            },
+            data=flux,
+            timeout=5,
+        )
+        response.raise_for_status()
 
-        cards = [{"ip": ip, "up": s['up'], "down": s['down']} for ip, s in data_map.items()]
-        return {"ip_cards": sorted(cards, key=lambda x: (x["up"]+x["down"]), reverse=True)}
-    except Exception as e: 
-        return {"ip_cards": [], "error": str(e)}
+        data_map: dict[str, dict[str, int]] = {}
+        for row in csv.reader(io.StringIO(response.text)):
+            if len(row) < 7 or row[1].strip() != "_result":
+                continue
+            ip = row[6].strip()
+            field = row[5].strip()
+            value = int(float(row[4])) if row[4].strip() else 0
+            data_map.setdefault(ip, {"up": 0, "down": 0})
+            if field in {"up", "down"}:
+                data_map[ip][field] += value
 
-@app.get("/api/wifi_scan")
+        cards = [{"ip": ip, **values} for ip, values in data_map.items()]
+        return {"ip_cards": sorted(cards, key=lambda item: item["up"] + item["down"], reverse=True)}
+    except (OSError, ValueError, requests.RequestException):
+        logger.exception("Failed to load network traffic state")
+        raise HTTPException(status_code=503, detail="Network traffic data is unavailable.")
+
+
+@protected.get("/api/wifi_scan")
 def get_wifi():
-    """OLD: WiFi scan data"""
-    try:
-        return json.loads(pathlib.Path("/var/lib/netguard/wifi_scan.json").read_text())
-    except: 
-        return {"networks": []}
+    return read_json_safe("/var/lib/netguard/wifi_scan.json", {"networks": []})
 
-@app.get("/api/ai_thoughts")
+
+@protected.get("/api/ai_thoughts")
 def get_ai_thoughts():
-    """OLD: AI thoughts from log file"""
     try:
-        return {"lines": pathlib.Path("/var/lib/netguard/ai_thoughts.log").read_text().splitlines()[-15:]}
-    except: 
+        lines = pathlib.Path("/var/lib/netguard/ai_thoughts.log").read_text().splitlines()
+        return {"lines": lines[-15:]}
+    except OSError:
+        logger.exception("Failed to read AI activity log")
         return {"lines": ["AI Security Guard Active"]}
 
-# ============================================================================
-# NEW ENDPOINTS (Device Security Monitoring)
-# ============================================================================
 
-@app.get("/api/devices")
+@protected.get("/api/devices")
 def get_devices():
-    """NEW: Real device data from router telemetry"""
-    telemetry = read_json_safe('/var/lib/netguard/router_telemetry.json', {})
-    findings = read_json_safe('/var/lib/netguard/router_findings.json', {})
-    inventory = read_json_safe('/var/lib/netguard/router_inventory.json', {})
-    
-    if not telemetry.get('ok'):
-        return {'devices': [], 'count': 0, 'error': telemetry.get('error', 'Telemetry unavailable')}
-    
-    clients = telemetry.get('clients', {}) or {}
-    leases = clients.get('dhcp_leases', []) or []
-    arp = clients.get('arp', []) or []
-    reservations = inventory.get('reservations', []) or []
-    
+    telemetry = read_json_safe("/var/lib/netguard/router_telemetry.json", {})
+    findings = read_json_safe("/var/lib/netguard/router_findings.json", {})
+    inventory = read_json_safe("/var/lib/netguard/router_inventory.json", {})
+    if not telemetry.get("ok"):
+        raise HTTPException(status_code=503, detail="Telemetry is unavailable.")
+
+    clients = telemetry.get("clients", {}) or {}
+    reservations = inventory.get("reservations", []) or []
+    arp_entries = clients.get("arp", []) or []
     devices = []
-    for lease in leases:
-        mac = lease.get('mac', '').lower()
+    for lease in clients.get("dhcp_leases", []) or []:
+        mac = str(lease.get("mac", "")).lower()
         if not mac:
             continue
-        
-        ip = lease.get('ip', '')
-        hostname = lease.get('hostname', 'Unknown')
-        
-        # Check against real inventory
-        reserved = next((r for r in reservations if r.get('mac', '').lower() == mac), None)
-        
-        # Find real alerts
-        device_alerts = []
-        for alert in findings.get('alerts', []) or []:
-            alert_str = str(alert)
-            if mac in alert_str or ip in alert_str:
-                device_alerts.append(alert)
-        
-        # Check real ARP status
-        arp_entry = next((a for a in arp if a.get('mac', '').lower() == mac), None)
-        
+        ip = str(lease.get("ip", ""))
+        reserved = next((item for item in reservations if str(item.get("mac", "")).lower() == mac), None)
+        alerts = [alert for alert in findings.get("alerts", []) or [] if mac in str(alert) or ip in str(alert)]
+        reachable = any(str(item.get("mac", "")).lower() == mac for item in arp_entries)
         devices.append({
-            'mac': mac,
-            'ip': ip,
-            'hostname': hostname,
-            'known': reserved is not None,
-            'reserved_name': reserved.get('name', '') if reserved else '',
-            'reachable': arp_entry is not None,
-            'alerts': device_alerts,
-            'alert_count': len(device_alerts)
+            "mac": mac,
+            "ip": ip,
+            "hostname": lease.get("hostname", "Unknown"),
+            "known": reserved is not None,
+            "reserved_name": reserved.get("name", "") if reserved else "",
+            "reachable": reachable,
+            "alerts": alerts,
+            "alert_count": len(alerts),
         })
-    
-    return {'devices': devices, 'count': len(devices)}
+    return {"devices": devices, "count": len(devices)}
 
-@app.get("/api/status")
+
+@protected.get("/api/status")
 def api_status():
-    """NEW: System health status"""
-    telemetry = read_json_safe('/var/lib/netguard/router_telemetry.json', {})
-    findings = read_json_safe('/var/lib/netguard/router_findings.json', {})
-    health = read_json_safe('/var/lib/netguard/health.json', {})
-    ai_state = read_json_safe('/var/lib/netguard/ai_guard_state.json', {})
-    
+    telemetry = read_json_safe("/var/lib/netguard/router_telemetry.json", {})
+    findings = read_json_safe("/var/lib/netguard/router_findings.json", {})
+    health = read_json_safe("/var/lib/netguard/health.json", {})
+    ai_state = read_json_safe("/var/lib/netguard/ai_guard_state.json", {})
     return {
-        'version': VERSION,
-        'telemetry_ok': telemetry.get('ok', False),
-        'active_alerts': len(findings.get('alerts', [])),
-        'health_status': health.get('status', 'unknown'),
-        'ai_active': len(ai_state.get('thoughts', [])) > 0,
-        'last_update': telemetry.get('generated_at', 'unknown')
+        "version": VERSION,
+        "telemetry_ok": telemetry.get("ok", False),
+        "active_alerts": len(findings.get("alerts", [])),
+        "health_status": health.get("status", "unknown"),
+        "ai_active": bool(ai_state.get("thoughts", [])),
+        "last_update": telemetry.get("generated_at", "unknown"),
     }
 
-@app.get("/api/findings")
+
+@protected.get("/api/findings")
 def get_findings():
-    """NEW: Security findings and alerts"""
-    findings = read_json_safe('/var/lib/netguard/router_findings.json', {})
-    return findings
+    return read_json_safe("/var/lib/netguard/router_findings.json", {})
 
-# ============================================================================
-# HTML Endpoint
-# ============================================================================
 
-@app.get("/", response_class=HTMLResponse)
+@protected.get("/", response_class=HTMLResponse)
 def root():
-    html_path = pathlib.Path("/opt/netguard/static/ng_live.html")
-    return html_path.read_text()
+    return pathlib.Path("/opt/netguard/static/ng_live.html").read_text()
 
-@app.get("/v2", response_class=HTMLResponse)
+
+@protected.get("/v2", response_class=HTMLResponse)
 def root_v2():
-    """NEW: Enhanced cyberpunk interface"""
-    html_path = pathlib.Path("/opt/netguard/static/ng_unified.html")
-    return html_path.read_text()
+    return pathlib.Path("/opt/netguard/static/ng_unified.html").read_text()
+
+
+app.include_router(protected)
