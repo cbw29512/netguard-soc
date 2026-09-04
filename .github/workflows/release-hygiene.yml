@@ -1,0 +1,70 @@
+name: NetGuard SOC Release Hygiene
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-hygiene:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Reject generated runtime and local-state artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bad="$(git ls-files | grep -E '(^|/)(venv|\.venv|__pycache__|node_modules|dist|build)(/|$)|\.py[co]$|\.sqlite3?$|grafana\.db$|(^|/)[^/]*\.backup([._-]|$)|(^|/)[^/]*backup_[^/]*$' || true)"
+          if [[ -n "$bad" ]]; then
+            echo "Generated/runtime artifacts are still tracked:"
+            printf '%s\n' "$bad"
+            exit 1
+          fi
+
+      - name: Compile Python source
+        run: python -m compileall -q app sensors soc soc_ai
+
+      - name: Validate tracked JSON and CSV configuration
+        run: |
+          python - <<'PY'
+          import csv
+          import json
+          import pathlib
+          import subprocess
+
+          files = subprocess.check_output(['git', 'ls-files'], text=True).splitlines()
+          for name in files:
+              path = pathlib.Path(name)
+              if path.suffix.lower() == '.json':
+                  with path.open('r', encoding='utf-8') as fh:
+                      json.load(fh)
+              elif path.suffix.lower() == '.csv':
+                  with path.open('r', encoding='utf-8', newline='') as fh:
+                      rows = list(csv.reader(fh))
+                      if rows and any(len(row) != len(rows[0]) for row in rows[1:]):
+                          raise SystemExit(f'CSV column mismatch: {path}')
+          print('Tracked JSON and CSV inputs parsed successfully.')
+          PY
+
+      - name: Verify private-lab inventory is not reintroduced
+        shell: bash
+        run: |
+          set -euo pipefail
+          forbidden='app/main\.py\.backup|enterprise/grafana/data/|venv/|__pycache__/|grafana\.db$'
+          if git ls-files | grep -E -q "$forbidden"; then
+            echo "A forbidden local/runtime path is tracked."
+            exit 1
+          fi
+          echo "Source tree is free of blocked local/runtime paths."
