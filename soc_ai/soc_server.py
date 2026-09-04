@@ -489,9 +489,6 @@ _ALERTS_PATH = "/var/lib/netguard/alerts.json"
 _AI_RAG_PATH = "/var/lib/netguard/ai_rag_state.json"
 _AI_GUARD_PATH = "/var/lib/netguard/ai_guard_state.json"
 
-def _ng_now_iso() -> str:
-    return datetime.now().astimezone().isoformat(timespec="seconds")
-
 def _ng_id(*parts: str) -> str:
     raw = "||".join([p for p in parts if p is not None])
     return hashlib.sha256(raw.encode("utf-8", "ignore")).hexdigest()[:16]
