@@ -104,7 +104,7 @@ def _utc_now_iso() -> str:
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()
 
-def _read_json(path: Path):
+def _read_json_optional(path: Path):
     try:
         return json.loads(path.read_text(encoding="utf-8", errors="replace"))
     except Exception:
@@ -178,11 +178,11 @@ def api_router_bundle():
         meta[k] = _file_meta(path)
     out["meta"] = meta
 
-    out["router"]["telemetry"] = _read_json(files["telemetry"]) or {}
-    out["router"]["findings"]  = _read_json(files["findings"])  or {}
-    out["router"]["inventory"] = _read_json(files["inventory"]) or {}
-    out["router"]["baseline"]  = _read_json(files["baseline"])  or {}
-    ai = _read_json(files["ai"]) or {}
+    out["router"]["telemetry"] = _read_json_optional(files["telemetry"]) or {}
+    out["router"]["findings"]  = _read_json_optional(files["findings"])  or {}
+    out["router"]["inventory"] = _read_json_optional(files["inventory"]) or {}
+    out["router"]["baseline"]  = _read_json_optional(files["baseline"])  or {}
+    ai = _read_json_optional(files["ai"]) or {}
     out["router"]["ai"] = ai
 
     findings = out["router"]["findings"] if isinstance(out["router"]["findings"], dict) else {}
