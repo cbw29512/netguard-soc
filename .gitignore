@@ -2,6 +2,7 @@
 enterprise/secrets/
 enterprise/grafana/provisioning/datasources/influxdb.yaml
 enterprise/grafana/data/
+enterprise/influxdb/data/
 *.token
 *.tgz
 tmp/
