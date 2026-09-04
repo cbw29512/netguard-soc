@@ -65,37 +65,23 @@ jobs:
                       pass
                   return False
           '''.replace('              ', '')
-          dead_v5 = '''
-          # NETGUARD_ALERTS_SAVE_OVERRIDE_V5
-          # Override saver with a real atomic write (tmp -> replace).
-          def _ng_save_overrides(d: dict):
-              try:
-                  import os, json
-                  p = _NG_ALERTS_OVERRIDES_PATH  # already pinned earlier
-                  tmp = p + ".tmp"
-                  with open(tmp, "w", encoding="utf-8") as f:
-                      json.dump(d, f, ensure_ascii=False, indent=2, sort_keys=True)
-                      f.flush()
-                      os.fsync(f.fileno())
-                  os.replace(tmp, p)
-              except Exception as e:
-                  # Never crash the server on persistence issues; log and continue.
-                  try:
-                      print("[netguard] overrides save failed:", repr(e))
-                  except Exception:
-                      pass
-          '''.replace('          ', '')
+          marker = '# NETGUARD_ALERTS_SAVE_OVERRIDE_V5\n'
 
-          if text.count(old_primary) == 1 and text.count(dead_v5) == 1:
-              text = text.replace(old_primary, new_primary, 1).replace(dead_v5, '\n', 1)
+          if text.count(old_primary) == 1 and text.count(marker) == 1:
+              marker_index = text.index(marker)
+              tail = text[marker_index:]
+              if tail.count('def _ng_save_overrides(d: dict):') != 1:
+                  raise SystemExit('Unexpected V5 saver tail shape; refusing edit.')
+              text = text.replace(old_primary, new_primary, 1)
+              text = text[:text.index(marker)].rstrip() + '\n'
               path.write_text(text, encoding='utf-8')
-              print('Consolidated override saver before server startup and removed dead post-startup override.')
-          elif text.count(new_primary) == 1 and text.count(dead_v5) == 0:
+              print('Consolidated durable saver before startup and removed the unique V5 EOF override.')
+          elif text.count(new_primary) == 1 and text.count(marker) == 0:
               print('Override saver already consolidated.')
           else:
               raise SystemExit(
                   f'Override saver assertion failed: primary={text.count(old_primary)}, '
-                  f'consolidated={text.count(new_primary)}, dead_v5={text.count(dead_v5)}'
+                  f'consolidated={text.count(new_primary)}, marker={text.count(marker)}'
               )
 
       - name: Commit consolidation when needed
