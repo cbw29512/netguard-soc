@@ -1,6 +1,7 @@
 # Secrets and generated archives
 enterprise/secrets/
 enterprise/grafana/provisioning/datasources/influxdb.yaml
+enterprise/grafana/data/
 *.token
 *.tgz
 tmp/
@@ -15,6 +16,12 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Local backup/scratch files
+*.bak
+*.backup
+*.backup_*
+*~
 
 # Local environment/config files
 .env
