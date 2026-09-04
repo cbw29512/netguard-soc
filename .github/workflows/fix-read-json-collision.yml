@@ -1,0 +1,64 @@
+name: NetGuard SOC JSON Helper Collision Fix
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.head_ref == 'release/public-hardening'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout hardening branch
+        uses: actions/checkout@v4
+        with:
+          ref: release/public-hardening
+
+      - name: Rename optional JSON helper with exact assertions
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('soc/app/main.py')
+          text = path.read_text(encoding='utf-8')
+          replacements = [
+              ('def _read_json(path: Path):', 'def _read_json_optional(path: Path):'),
+              ('_read_json(files["telemetry"])', '_read_json_optional(files["telemetry"])'),
+              ('_read_json(files["findings"])', '_read_json_optional(files["findings"])'),
+              ('_read_json(files["inventory"])', '_read_json_optional(files["inventory"])'),
+              ('_read_json(files["baseline"])', '_read_json_optional(files["baseline"])'),
+              ('_read_json(files["ai"])', '_read_json_optional(files["ai"])'),
+          ]
+          changed = False
+          for old, new in replacements:
+              old_count = text.count(old)
+              new_count = text.count(new)
+              if old_count == 1 and new_count == 0:
+                  text = text.replace(old, new, 1)
+                  changed = True
+              elif old_count == 0 and new_count == 1:
+                  continue
+              else:
+                  raise SystemExit(f'JSON helper assertion failed: old={old_count}, new={new_count}, fragment={old!r}')
+          if changed:
+              path.write_text(text, encoding='utf-8')
+              print('Renamed colliding JSON helper and its router callers.')
+          else:
+              print('JSON helper collision already fixed.')
+
+      - name: Commit fix when needed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- soc/app/main.py; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add soc/app/main.py
+          git commit -m "fix: separate optional router JSON reader"
+          git push origin HEAD:release/public-hardening
