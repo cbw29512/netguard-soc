@@ -1,28 +1,32 @@
 services:
   influxdb:
-    image: influxdb:2.7
+    image: ${INFLUXDB_IMAGE:-influxdb:2.7}
     container_name: netguard-influxdb
     ports:
-      - "8086:8086"
+      - "127.0.0.1:8086:8086"
     volumes:
       - ./influxdb/data:/var/lib/influxdb2
       - ./influxdb/config:/etc/influxdb2
     environment:
-      - DOCKER_INFLUXDB_INIT_MODE=setup
-      - DOCKER_INFLUXDB_INIT_USERNAME=netguard
-      - DOCKER_INFLUXDB_INIT_PASSWORD=netguardpassword
-      - DOCKER_INFLUXDB_INIT_ORG=netguard
-      - DOCKER_INFLUXDB_INIT_BUCKET=network_stats
-      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=a4cd19967eab33610a7f98e09267a6e68ad949b1b1f14ef9b4355b95cd1bf831
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUXDB_INIT_USERNAME:-netguard}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_INIT_PASSWORD:?Set INFLUXDB_INIT_PASSWORD in the local environment}
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUXDB_INIT_ORG:-netguard}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUXDB_INIT_BUCKET:-network_stats}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_INIT_ADMIN_TOKEN:?Set INFLUXDB_INIT_ADMIN_TOKEN in the local environment}
     restart: unless-stopped
 
   grafana:
-    image: grafana/grafana:latest
+    image: ${GRAFANA_IMAGE:-grafana/grafana:13.2}
     container_name: netguard-grafana
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     volumes:
       - ./grafana/data:/var/lib/grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-netguard-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in the local environment}
+      GF_USERS_ALLOW_SIGN_UP: "false"
     depends_on:
       - influxdb
     restart: unless-stopped

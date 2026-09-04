@@ -1,15 +1,16 @@
-import time
-import subprocess
 from __future__ import annotations
+
 import json
 import os
-from pathlib import Path
+import subprocess
+import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List
 
 import requests
 from fastapi import FastAPI
-from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 def utc_now_iso() -> str:
@@ -103,7 +104,7 @@ def _utc_now_iso() -> str:
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()
 
-def _read_json(path: Path):
+def _read_json_optional(path: Path):
     try:
         return json.loads(path.read_text(encoding="utf-8", errors="replace"))
     except Exception:
@@ -177,11 +178,11 @@ def api_router_bundle():
         meta[k] = _file_meta(path)
     out["meta"] = meta
 
-    out["router"]["telemetry"] = _read_json(files["telemetry"]) or {}
-    out["router"]["findings"]  = _read_json(files["findings"])  or {}
-    out["router"]["inventory"] = _read_json(files["inventory"]) or {}
-    out["router"]["baseline"]  = _read_json(files["baseline"])  or {}
-    ai = _read_json(files["ai"]) or {}
+    out["router"]["telemetry"] = _read_json_optional(files["telemetry"]) or {}
+    out["router"]["findings"]  = _read_json_optional(files["findings"])  or {}
+    out["router"]["inventory"] = _read_json_optional(files["inventory"]) or {}
+    out["router"]["baseline"]  = _read_json_optional(files["baseline"])  or {}
+    ai = _read_json_optional(files["ai"]) or {}
     out["router"]["ai"] = ai
 
     findings = out["router"]["findings"] if isinstance(out["router"]["findings"], dict) else {}
@@ -206,4 +207,3 @@ def api_services():
     units = [u.strip() for u in units_env.split(",") if u.strip()] if units_env else _DEFAULT_UNITS
     statuses = [_systemd_unit_status(u) for u in units]
     return {"generated_at": _utc_now_iso(), "soc_version": os.getenv("SOC_VERSION",""), "units": statuses}
-

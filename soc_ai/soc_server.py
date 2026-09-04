@@ -489,9 +489,6 @@ _ALERTS_PATH = "/var/lib/netguard/alerts.json"
 _AI_RAG_PATH = "/var/lib/netguard/ai_rag_state.json"
 _AI_GUARD_PATH = "/var/lib/netguard/ai_guard_state.json"
 
-def _ng_now_iso() -> str:
-    return datetime.now().astimezone().isoformat(timespec="seconds")
-
 def _ng_id(*parts: str) -> str:
     raw = "||".join([p for p in parts if p is not None])
     return hashlib.sha256(raw.encode("utf-8", "ignore")).hexdigest()[:16]
@@ -680,14 +677,20 @@ def _ng_save_overrides(d: dict):
         os.makedirs(os.path.dirname(p), exist_ok=True)
         tmp = p + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(d, f, indent=2, sort_keys=True)
+            json.dump(d, f, ensure_ascii=False, indent=2, sort_keys=True)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, p)
         try:
             os.chmod(p, 0o644)
         except Exception:
             pass
         return True
-    except Exception:
+    except Exception as e:
+        try:
+            print("[netguard] overrides save failed:", repr(e))
+        except Exception:
+            pass
         return False
 
 @app.route("/api/alerts", methods=["GET"])
@@ -1166,24 +1169,3 @@ def ng_device_action():
 if __name__ == '__main__':
     Thread(target=broadcast_updates, daemon=True).start()
     socketio.run(app, host='0.0.0.0', port=8055, debug=False, allow_unsafe_werkzeug=True)
-
-
-# NETGUARD_ALERTS_SAVE_OVERRIDE_V5
-# Override saver with a real atomic write (tmp -> replace).
-def _ng_save_overrides(d: dict):
-    try:
-        import os, json
-        p = _NG_ALERTS_OVERRIDES_PATH  # already pinned earlier
-        tmp = p + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(d, f, ensure_ascii=False, indent=2, sort_keys=True)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, p)
-    except Exception as e:
-        # Never crash the server on persistence issues; log and continue.
-        try:
-            print("[netguard] overrides save failed:", repr(e))
-        except Exception:
-            pass
-
