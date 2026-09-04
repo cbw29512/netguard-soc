@@ -1,5 +1,28 @@
+# Secrets and generated archives
 enterprise/secrets/
 enterprise/grafana/provisioning/datasources/influxdb.yaml
 *.token
 *.tgz
 tmp/
+
+# Python environments and generated caches
+venv/
+.venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local environment/config files
+.env
+.env.*
+!.env.example
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
