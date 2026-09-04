@@ -1,0 +1,112 @@
+name: NetGuard SOC Override Saver Consolidation
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.head_ref == 'release/public-hardening'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout hardening branch
+        uses: actions/checkout@v4
+        with:
+          ref: release/public-hardening
+
+      - name: Consolidate duplicate saver with exact assertions
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('soc_ai/soc_server.py')
+          text = path.read_text(encoding='utf-8')
+          old_primary = '''def _ng_save_overrides(d: dict):
+              try:
+                  import json, os
+                  p = _NG_ALERTS_OVERRIDES_PATH
+                  os.makedirs(os.path.dirname(p), exist_ok=True)
+                  tmp = p + ".tmp"
+                  with open(tmp, "w", encoding="utf-8") as f:
+                      json.dump(d, f, indent=2, sort_keys=True)
+                  os.replace(tmp, p)
+                  try:
+                      os.chmod(p, 0o644)
+                  except Exception:
+                      pass
+                  return True
+              except Exception:
+                  return False
+          '''.replace('              ', '')
+          new_primary = '''def _ng_save_overrides(d: dict):
+              try:
+                  import json, os
+                  p = _NG_ALERTS_OVERRIDES_PATH
+                  os.makedirs(os.path.dirname(p), exist_ok=True)
+                  tmp = p + ".tmp"
+                  with open(tmp, "w", encoding="utf-8") as f:
+                      json.dump(d, f, ensure_ascii=False, indent=2, sort_keys=True)
+                      f.flush()
+                      os.fsync(f.fileno())
+                  os.replace(tmp, p)
+                  try:
+                      os.chmod(p, 0o644)
+                  except Exception:
+                      pass
+                  return True
+              except Exception as e:
+                  try:
+                      print("[netguard] overrides save failed:", repr(e))
+                  except Exception:
+                      pass
+                  return False
+          '''.replace('              ', '')
+          dead_v5 = '''
+          # NETGUARD_ALERTS_SAVE_OVERRIDE_V5
+          # Override saver with a real atomic write (tmp -> replace).
+          def _ng_save_overrides(d: dict):
+              try:
+                  import os, json
+                  p = _NG_ALERTS_OVERRIDES_PATH  # already pinned earlier
+                  tmp = p + ".tmp"
+                  with open(tmp, "w", encoding="utf-8") as f:
+                      json.dump(d, f, ensure_ascii=False, indent=2, sort_keys=True)
+                      f.flush()
+                      os.fsync(f.fileno())
+                  os.replace(tmp, p)
+              except Exception as e:
+                  # Never crash the server on persistence issues; log and continue.
+                  try:
+                      print("[netguard] overrides save failed:", repr(e))
+                  except Exception:
+                      pass
+          '''.replace('          ', '')
+
+          if text.count(old_primary) == 1 and text.count(dead_v5) == 1:
+              text = text.replace(old_primary, new_primary, 1).replace(dead_v5, '\n', 1)
+              path.write_text(text, encoding='utf-8')
+              print('Consolidated override saver before server startup and removed dead post-startup override.')
+          elif text.count(new_primary) == 1 and text.count(dead_v5) == 0:
+              print('Override saver already consolidated.')
+          else:
+              raise SystemExit(
+                  f'Override saver assertion failed: primary={text.count(old_primary)}, '
+                  f'consolidated={text.count(new_primary)}, dead_v5={text.count(dead_v5)}'
+              )
+
+      - name: Commit consolidation when needed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- soc_ai/soc_server.py; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add soc_ai/soc_server.py
+          git commit -m "fix: consolidate atomic alert override saver"
+          git push origin HEAD:release/public-hardening
