@@ -36,8 +36,8 @@ jobs:
       - name: Compile Python source
         run: python -m compileall -q app sensors soc soc_ai tests
 
-      - name: Enforce enterprise security contract
-        run: python -m unittest tests.test_release_security -v
+      - name: Run deterministic core tests
+        run: python -m unittest tests.test_safe_json tests.test_release_security -v
 
       - name: Reject duplicate top-level Python function definitions
         run: |
