@@ -10,9 +10,25 @@ ENV_EXAMPLE = (ROOT / "enterprise" / ".env.example").read_text(encoding="utf-8")
 class EnterpriseReleaseSecurityTests(unittest.TestCase):
     def test_no_literal_enterprise_credentials(self):
         self.assertNotIn("netguardpassword", COMPOSE.lower())
-        self.assertNotRegex(COMPOSE, r"DOCKER_INFLUXDB_INIT_ADMIN_TOKEN:\s*[0-9a-fA-F]{32,}")
-        self.assertNotRegex(COMPOSE, r"DOCKER_INFLUXDB_INIT_PASSWORD:\s*[^$\n][^\n]*")
-        self.assertNotRegex(COMPOSE, r"GF_SECURITY_ADMIN_PASSWORD:\s*[^$\n][^\n]*")
+        assignments = {}
+        for raw in COMPOSE.splitlines():
+            line = raw.strip()
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            if key in {
+                "DOCKER_INFLUXDB_INIT_PASSWORD",
+                "DOCKER_INFLUXDB_INIT_ADMIN_TOKEN",
+                "GF_SECURITY_ADMIN_PASSWORD",
+            }:
+                assignments[key] = value.strip()
+
+        expected = {
+            "DOCKER_INFLUXDB_INIT_PASSWORD": "${INFLUXDB_INIT_PASSWORD:?Set INFLUXDB_INIT_PASSWORD in the local environment}",
+            "DOCKER_INFLUXDB_INIT_ADMIN_TOKEN": "${INFLUXDB_INIT_ADMIN_TOKEN:?Set INFLUXDB_INIT_ADMIN_TOKEN in the local environment}",
+            "GF_SECURITY_ADMIN_PASSWORD": "${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in the local environment}",
+        }
+        self.assertEqual(assignments, expected)
 
     def test_required_secrets_fail_closed(self):
         for variable in (
