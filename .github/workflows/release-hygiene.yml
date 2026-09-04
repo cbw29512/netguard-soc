@@ -36,6 +36,28 @@ jobs:
       - name: Compile Python source
         run: python -m compileall -q app sensors soc soc_ai
 
+      - name: Reject duplicate top-level Python function definitions
+        run: |
+          python - <<'PY'
+          import ast
+          import pathlib
+          import subprocess
+
+          for name in subprocess.check_output(['git', 'ls-files', '*.py'], text=True).splitlines():
+              path = pathlib.Path(name)
+              tree = ast.parse(path.read_text(encoding='utf-8'), filename=name)
+              seen = {}
+              for node in tree.body:
+                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                      if node.name in seen:
+                          raise SystemExit(
+                              f'Duplicate top-level function {node.name!r} in {name}: '
+                              f'lines {seen[node.name]} and {node.lineno}'
+                          )
+                      seen[node.name] = node.lineno
+          print('No duplicate top-level Python function definitions found.')
+          PY
+
       - name: Validate tracked JSON and CSV configuration
         run: |
           python - <<'PY'
@@ -62,7 +84,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          forbidden='app/main\.py\.backup|enterprise/grafana/data/|venv/|__pycache__/|grafana\.db$'
+          forbidden='app/main\.py\.backup|enterprise/grafana/data/|enterprise/influxdb/data/|venv/|__pycache__/|grafana\.db$'
           if git ls-files | grep -E -q "$forbidden"; then
             echo "A forbidden local/runtime path is tracked."
             exit 1
