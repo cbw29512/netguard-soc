@@ -1,15 +1,16 @@
-import time
-import subprocess
 from __future__ import annotations
+
 import json
 import os
-from pathlib import Path
+import subprocess
+import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List
 
 import requests
 from fastapi import FastAPI
-from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 def utc_now_iso() -> str:
@@ -206,4 +207,3 @@ def api_services():
     units = [u.strip() for u in units_env.split(",") if u.strip()] if units_env else _DEFAULT_UNITS
     statuses = [_systemd_unit_status(u) for u in units]
     return {"generated_at": _utc_now_iso(), "soc_version": os.getenv("SOC_VERSION",""), "units": statuses}
-
