@@ -32,18 +32,19 @@ Before publishing or deploying a build:
 
 **Portfolio / active hardening.** The architecture is substantial enough to publish as a security-engineering project, but the repository is not yet release-certified.
 
-Known cleanup work includes removing the already-tracked `venv/` directory from Git history/tree, adding automated security and test gates, documenting installation/recovery, and verifying that example configuration cannot be mistaken for production-safe defaults.
+The previously tracked Python virtual environment has been removed from the release branch and ignore rules now prevent it from returning. Remaining hardening work is focused on automated security/test gates, installation/recovery documentation, and verifying that example configuration cannot be mistaken for production-safe defaults.
 
 ## Public-release checklist
 
-- Remove tracked virtual environment/build artifacts
-- Secret and dependency scanning
-- Automated tests for core ingestion/processing paths
-- Container/config validation
-- Secure-default review
-- Installation and rollback documentation
-- Screenshot/demo material that contains no private infrastructure data
-- CI required before merge
+- [x] Remove tracked virtual environment/build artifacts
+- [x] Ignore future virtual environments, caches, and local environment files
+- [ ] Secret and dependency scanning
+- [ ] Automated tests for core ingestion/processing paths
+- [ ] Container/config validation
+- [ ] Secure-default review
+- [ ] Installation and rollback documentation
+- [ ] Screenshot/demo material that contains no private infrastructure data
+- [ ] CI required before merge
 
 ## Support
 
